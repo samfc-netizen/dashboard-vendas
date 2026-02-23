@@ -205,6 +205,19 @@ def carregar_dados():
     df["SEGMENTO_N"] = normalize_dim(df["SEGMENTO"], "SEM SEGMENTO") if "SEGMENTO" in df.columns else pd.Series(["SEM SEGMENTO"] * len(df), dtype="string")
     df["LINHA_N"] = normalize_dim(df["LINHA"], "SEM LINHA") if "LINHA" in df.columns else pd.Series(["SEM LINHA"] * len(df), dtype="string")
 
+    # PRODUTO (CÓD + DESCRIÇÃO)
+    col_cod = pick_first_existing_col(df, ["CÓD", "COD", "CÓDIGO", "CODIGO", "COD.", "COD PROD", "CODPROD", "COD PRODUTO"])
+    if col_cod is not None:
+        df["COD_N"] = normalize_dim(df[col_cod], "SEM COD")
+    else:
+        df["COD_N"] = pd.Series(["SEM COD"] * len(df), dtype="string")
+
+    col_desc = pick_first_existing_col(df, ["DESCRIÇÃO", "DESCRICAO", "DESCR", "DESCRI", "PRODUTO", "DESCRIÇÃO / REFERÊNCIA", "DESCRICAO / REFERENCIA", "DESCRIÇÃO/REFERÊNCIA", "DESCRICAO/REFERENCIA"])
+    if col_desc is not None:
+        df["DESC_N"] = normalize_dim(df[col_desc], "SEM DESCRIÇÃO")
+    else:
+        df["DESC_N"] = pd.Series(["SEM DESCRIÇÃO"] * len(df), dtype="string")
+
     # CLIENTE
     col_cliente = pick_first_existing_col(df, ["CLIENTE", "CLIENTE_NOME", "NOMECLIENTE", "RAZAOSOCIAL", "RAZAO SOCIAL"])
     if col_cliente is not None:
@@ -871,6 +884,69 @@ with col2:
         full["% do Total"] = full["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
         st.dataframe(full[["MARCA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=520)
 
+
+# ============================================================
+# KPI: Marca → Linhas → Produtos
+# ============================================================
+st.subheader("KPI: Marca → Linhas → Produtos")
+
+marcas_disp = sorted([x for x in df_f["MARCA_N"].dropna().astype(str).unique() if str(x).strip() != ""])
+marca_opts = ["(Todos)"] + marcas_disp
+
+if "marca_kpi_sel" not in st.session_state:
+    st.session_state["marca_kpi_sel"] = "(Todos)"
+
+marca_sel = st.selectbox("Marca (KPI)", options=marca_opts, index=marca_opts.index(st.session_state["marca_kpi_sel"]) if st.session_state["marca_kpi_sel"] in marca_opts else 0, key="marca_kpi_select")
+st.session_state["marca_kpi_sel"] = marca_sel
+
+if marca_sel == "(Todos)":
+    df_marca = df_f.copy()
+else:
+    df_marca = df_f[df_f["MARCA_N"] == marca_sel].copy()
+
+# Totais do recorte
+val_total_marca = float(df_marca[VAL_COL].sum()) if len(df_marca) else 0.0
+qtd_total_marca = float(df_marca["QTD_NUM"].sum()) if (len(df_marca) and "QTD_NUM" in df_marca.columns) else 0.0
+
+km1, km2 = st.columns(2)
+with km1:
+    st.metric("Valor (R$)", "R$ " + format_brl(val_total_marca))
+with km2:
+    st.metric("Quantidade (QTD)", format_brl(qtd_total_marca))
+
+# Linhas da marca
+linhas_marca = (
+    df_marca.groupby("LINHA_N", dropna=False)
+    .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
+    .reset_index()
+    .rename(columns={"LINHA_N": "LINHA"})
+    .sort_values("VALOR", ascending=False)
+)
+
+linhas_view = linhas_marca.copy()
+linhas_view["VALOR (R$)"] = linhas_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
+linhas_view["QTD"] = linhas_view["QTD"].apply(lambda v: format_brl(v))
+
+st.markdown("#### Linhas (da marca selecionada)")
+st.dataframe(linhas_view[["LINHA", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=420)
+
+# Produtos da marca (CÓD + Descrição)
+with st.expander("Ver produtos (CÓD + Descrição)"):
+    if ("COD_N" not in df_marca.columns) or ("DESC_N" not in df_marca.columns):
+        st.info("Colunas de produto (CÓD / Descrição) não foram encontradas no Excel.")
+    else:
+        prod = (
+            df_marca.groupby(["COD_N", "DESC_N"], dropna=False)
+            .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
+            .reset_index()
+            .rename(columns={"COD_N": "CÓD", "DESC_N": "DESCRIÇÃO"})
+            .sort_values("VALOR", ascending=False)
+        )
+        prod_view = prod.copy()
+        prod_view["VALOR (R$)"] = prod_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
+        prod_view["QTD"] = prod_view["QTD"].apply(lambda v: format_brl(v))
+        st.dataframe(prod_view[["CÓD", "DESCRIÇÃO", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=520)
+
 st.divider()
 
 # =========================
@@ -1182,8 +1258,9 @@ st.divider()
 
 st.subheader("Drill: Cliente → Linhas → Marcas")
 
-clientes_disp = clientes["CLIENTE"].tolist()
-if len(clientes_disp) == 0:
+clientes_lista = clientes["CLIENTE"].tolist()
+clientes_disp = ["(Todos)"] + clientes_lista
+if len(clientes_lista) == 0:
     st.info("Não há clientes na base filtrada.")
 else:
     s1, s2, s3 = st.columns([1.2, 0.6, 1.4], gap="medium")
@@ -1194,7 +1271,7 @@ else:
         if st.button("Pesquisar Cliente"):
             t = (termo_cli or "").strip().lower()
             if t:
-                matches = [x for x in clientes_disp if t in str(x).lower()]
+                matches = [x for x in clientes_lista if t in str(x).lower()]
                 if matches:
                     st.session_state["cliente_sel"] = matches[0]
                 else:
@@ -1203,26 +1280,31 @@ else:
                 st.info("Digite um termo para pesquisar.")
 
     t_live = (termo_cli or "").strip().lower()
-    clientes_filtrados = [x for x in clientes_disp if (t_live in str(x).lower())] if t_live else clientes_disp
+    clientes_filtrados_base = [x for x in clientes_lista if (t_live in str(x).lower())] if t_live else clientes_lista
+    clientes_filtrados = ["(Todos)"] + clientes_filtrados_base
 
     if "cliente_sel" not in st.session_state:
-        st.session_state["cliente_sel"] = clientes_filtrados[0] if clientes_filtrados else clientes_disp[0]
+        st.session_state["cliente_sel"] = "(Todos)"
 
     cliente_padrao = st.session_state["cliente_sel"]
-    if clientes_filtrados and cliente_padrao not in clientes_filtrados:
-        cliente_padrao = clientes_filtrados[0]
+    if cliente_padrao not in clientes_filtrados:
+        cliente_padrao = "(Todos)" if "(Todos)" in clientes_filtrados else (clientes_filtrados[0] if clientes_filtrados else "(Todos)")
         st.session_state["cliente_sel"] = cliente_padrao
 
     with s3:
         cliente_sel = st.selectbox(
             "CLIENTE selecionado",
-            options=clientes_filtrados if clientes_filtrados else clientes_disp,
-            index=(clientes_filtrados if clientes_filtrados else clientes_disp).index(cliente_padrao),
+            options=clientes_filtrados,
+            index=clientes_filtrados.index(cliente_padrao) if cliente_padrao in clientes_filtrados else 0,
             key="cliente_sel_main",
         )
         st.session_state["cliente_sel"] = cliente_sel
 
-    df_cliente = df_cli_base[df_cli_base["CLIENTE_N"] == st.session_state["cliente_sel"]].copy()
+    if st.session_state["cliente_sel"] == "(Todos)":
+        df_cliente = df_cli_base.copy()
+    else:
+        df_cliente = df_cli_base[df_cli_base["CLIENTE_N"] == st.session_state["cliente_sel"]].copy()
+
     total_cliente = float(df_cliente["VAL_CLIENTE"].sum()) if len(df_cliente) else 0.0
 
     m1, m2 = st.columns([1, 2])
