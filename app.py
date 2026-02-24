@@ -1360,6 +1360,65 @@ else:
 
     st.divider()
 
+# ============================================================
+# KPI: Evolução de Clientes (Linha: TINTA DE LABORATÓRIO)
+# ============================================================
+st.subheader("KPI: Evolução de Clientes (Linha: TINTA DE LABORATÓRIO)")
+
+LINHA_ALVO = "TINTA DE LABORATÓRIO"
+linha_alvo_key = canonical_key(LINHA_ALVO)
+
+df_evo = df_f.copy()
+if len(df_evo) == 0:
+    st.info("Sem dados para o recorte selecionado.")
+else:
+    df_evo = df_evo[df_evo["DATA"].notna()].copy()
+    df_evo = df_evo[df_evo["DATA"].dt.year == ANO_ATUAL].copy()
+
+    # filtra linha alvo (case/acentos-insensitive via canonical_key)
+    df_evo = df_evo[df_evo["LINHA_N"].astype("string").fillna("").apply(canonical_key) == linha_alvo_key].copy()
+
+    if len(df_evo) == 0:
+        st.info("Sem dados para a linha **TINTA DE LABORATÓRIO** no recorte selecionado.")
+    else:
+        df_evo["MES_NUM"] = df_evo["DATA"].dt.month
+
+        base = (
+            df_evo.groupby(["CLIENTE_N", "MES_NUM"], dropna=False)[VAL_COL]
+            .sum()
+            .reset_index()
+        )
+
+        tabela = base.pivot(index="CLIENTE_N", columns="MES_NUM", values=VAL_COL).fillna(0.0)
+
+        # garante colunas 1..12
+        for m in range(1, 13):
+            if m not in tabela.columns:
+                tabela[m] = 0.0
+        tabela = tabela[[1,2,3,4,5,6,7,8,9,10,11,12]]
+
+        mapa_meses = {
+            1: "JANEIRO", 2: "FEVEREIRO", 3: "MARÇO", 4: "ABRIL",
+            5: "MAIO", 6: "JUNHO", 7: "JULHO", 8: "AGOSTO",
+            9: "SETEMBRO", 10: "OUTUBRO", 11: "NOVEMBRO", 12: "DEZEMBRO",
+        }
+        tabela = tabela.rename(columns=mapa_meses)
+
+        # ordena por total do ano (desc)
+        tabela["_TOTAL"] = tabela.sum(axis=1)
+        tabela = tabela.sort_values("_TOTAL", ascending=False).drop(columns=["_TOTAL"])
+
+        # formata BRL
+        tabela_disp = tabela.copy()
+        for c in tabela_disp.columns:
+            tabela_disp[c] = tabela_disp[c].apply(lambda v: "R$ " + format_brl(v))
+
+        tabela_disp = tabela_disp.reset_index().rename(columns={"CLIENTE_N": "CLIENTE"})
+
+        st.dataframe(tabela_disp, use_container_width=True, hide_index=True, height=520)
+
+
+
     st.markdown(f"### Drill: Cliente **{st.session_state['cliente_sel']}** → Linha **{st.session_state['linha_cli_sel']}** → Marcas")
 
     df_cli_linha = df_cliente[df_cliente["LINHA_N"] == st.session_state["linha_cli_sel"]].copy()
