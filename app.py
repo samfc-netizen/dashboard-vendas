@@ -1326,7 +1326,7 @@ else:
     linhas_cli["% do Total"] = (linhas_cli["VR_TOTAL"] / den_total_cli) * 100
 
     if "linha_cli_sel" not in st.session_state:
-        st.session_state["linha_cli_sel"] = linhas_cli["LINHA"].iloc[0] if len(linhas_cli) else None
+        st.session_state["linha_cli_sel"] = "(Todas)"
 
     cL1, cL2 = st.columns([1.2, 1.0], gap="large")
     with cL1:
@@ -1338,12 +1338,14 @@ else:
         st.dataframe(linhas_view[["LINHA", "VR TOTAL (R$)", "% do Cliente", "% do Total"]], use_container_width=True, hide_index=True, height=420)
 
         st.markdown("**Selecione uma LINHA para ver as MARCAS dentro dela (para esse cliente):**")
+        linhas_opcoes = ["(Todas)"] + linhas_cli["LINHA"].tolist()
+        linha_padrao = st.session_state.get("linha_cli_sel", "(Todas)")
+        if linha_padrao not in linhas_opcoes:
+            linha_padrao = "(Todas)"
         st.session_state["linha_cli_sel"] = st.selectbox(
             "LINHA do Cliente",
-            options=linhas_cli["LINHA"].tolist(),
-            index=linhas_cli["LINHA"].tolist().index(st.session_state["linha_cli_sel"])
-            if st.session_state["linha_cli_sel"] in linhas_cli["LINHA"].tolist()
-            else 0,
+            options=linhas_opcoes,
+            index=linhas_opcoes.index(linha_padrao),
             key="linha_cli_sel_box",
         )
 
@@ -1360,68 +1362,16 @@ else:
 
     st.divider()
 
-# ============================================================
-# KPI: Evolução de Clientes (Linha: TINTA DE LABORATÓRIO)
-# ============================================================
-st.subheader("KPI: Evolução de Clientes (Linha: TINTA DE LABORATÓRIO)")
+    linha_label = st.session_state["linha_cli_sel"]
+    st.markdown(
+        f"### Drill: Cliente **{st.session_state['cliente_sel']}** → Linha **{linha_label}** → Marcas"
+    )
 
-LINHA_ALVO = "TINTA DE LABORATÓRIO"
-linha_alvo_key = canonical_key(LINHA_ALVO)
-
-df_evo = df_f.copy()
-if len(df_evo) == 0:
-    st.info("Sem dados para o recorte selecionado.")
-else:
-    df_evo = df_evo[df_evo["DATA"].notna()].copy()
-    df_evo = df_evo[df_evo["DATA"].dt.year == ANO_ATUAL].copy()
-
-    # filtra linha alvo (case/acentos-insensitive via canonical_key)
-    df_evo = df_evo[df_evo["LINHA_N"].astype("string").fillna("").apply(canonical_key) == linha_alvo_key].copy()
-
-    if len(df_evo) == 0:
-        st.info("Sem dados para a linha **TINTA DE LABORATÓRIO** no recorte selecionado.")
+    if st.session_state["linha_cli_sel"] == "(Todas)":
+        df_cli_linha = df_cliente.copy()
     else:
-        df_evo["MES_NUM"] = df_evo["DATA"].dt.month
+        df_cli_linha = df_cliente[df_cliente["LINHA_N"] == st.session_state["linha_cli_sel"]].copy()
 
-        base = (
-            df_evo.groupby(["CLIENTE_N", "MES_NUM"], dropna=False)[VAL_COL]
-            .sum()
-            .reset_index()
-        )
-
-        tabela = base.pivot(index="CLIENTE_N", columns="MES_NUM", values=VAL_COL).fillna(0.0)
-
-        # garante colunas 1..12
-        for m in range(1, 13):
-            if m not in tabela.columns:
-                tabela[m] = 0.0
-        tabela = tabela[[1,2,3,4,5,6,7,8,9,10,11,12]]
-
-        mapa_meses = {
-            1: "JANEIRO", 2: "FEVEREIRO", 3: "MARÇO", 4: "ABRIL",
-            5: "MAIO", 6: "JUNHO", 7: "JULHO", 8: "AGOSTO",
-            9: "SETEMBRO", 10: "OUTUBRO", 11: "NOVEMBRO", 12: "DEZEMBRO",
-        }
-        tabela = tabela.rename(columns=mapa_meses)
-
-        # ordena por total do ano (desc)
-        tabela["_TOTAL"] = tabela.sum(axis=1)
-        tabela = tabela.sort_values("_TOTAL", ascending=False).drop(columns=["_TOTAL"])
-
-        # formata BRL
-        tabela_disp = tabela.copy()
-        for c in tabela_disp.columns:
-            tabela_disp[c] = tabela_disp[c].apply(lambda v: "R$ " + format_brl(v))
-
-        tabela_disp = tabela_disp.reset_index().rename(columns={"CLIENTE_N": "CLIENTE"})
-
-        st.dataframe(tabela_disp, use_container_width=True, hide_index=True, height=520)
-
-
-
-    st.markdown(f"### Drill: Cliente **{st.session_state['cliente_sel']}** → Linha **{st.session_state['linha_cli_sel']}** → Marcas")
-
-    df_cli_linha = df_cliente[df_cliente["LINHA_N"] == st.session_state["linha_cli_sel"]].copy()
     total_cli_linha = float(df_cli_linha["VAL_CLIENTE"].sum()) if len(df_cli_linha) else 0.0
 
     cM1, cM2 = st.columns([1, 2])
@@ -1468,6 +1418,64 @@ else:
         )
         fig_mc.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="VR TOTAL (R$)", yaxis_title="Marca")
         st.plotly_chart(fig_mc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+
+# ============================================================
+# KPI: Evolução de Clientes (Linha: TINTA DE LABORATÓRIO)
+# ============================================================
+st.subheader("Evolução de Clientes — TINTA DE LABORATÓRIO (Jan → Dez)")
+
+df_evo = df_f.copy()
+df_evo = df_evo[df_evo["DATA"].notna()].copy()
+df_evo = df_evo[df_evo["DATA"].dt.year == ANO_ATUAL].copy()
+
+# Filtro da linha alvo
+df_evo = df_evo[df_evo["LINHA_N"].astype(str).str.upper() == "TINTA DE LABORATÓRIO"].copy()
+
+# Se o usuário estiver com um cliente específico selecionado no Drill, respeita o recorte
+if st.session_state.get("cliente_sel", "(Todos)") != "(Todos)":
+    df_evo = df_evo[df_evo["CLIENTE_N"] == st.session_state["cliente_sel"]].copy()
+
+if len(df_evo) == 0:
+    st.info("Sem dados para **TINTA DE LABORATÓRIO** no recorte atual (ano, lojas e período selecionados).")
+else:
+    df_evo["MES_NUM"] = df_evo["DATA"].dt.month
+
+    # Pivot: Cliente x Mês (VAL_COL já definido no app: VR_TOTAL_NUM ou FAT_LINHA)
+    tbl_evo = (
+        df_evo.groupby(["CLIENTE_N", "MES_NUM"], dropna=False)[VAL_COL]
+        .sum()
+        .reset_index()
+        .pivot(index="CLIENTE_N", columns="MES_NUM", values=VAL_COL)
+        .fillna(0.0)
+    )
+
+    # Garante colunas 1..12
+    for m in range(1, 13):
+        if m not in tbl_evo.columns:
+            tbl_evo[m] = 0.0
+    tbl_evo = tbl_evo[[1,2,3,4,5,6,7,8,9,10,11,12]]
+
+    meses_full = {
+        1: "JANEIRO", 2: "FEVEREIRO", 3: "MARÇO", 4: "ABRIL",
+        5: "MAIO", 6: "JUNHO", 7: "JULHO", 8: "AGOSTO",
+        9: "SETEMBRO", 10: "OUTUBRO", 11: "NOVEMBRO", 12: "DEZEMBRO",
+    }
+    tbl_evo = tbl_evo.rename(columns=meses_full)
+
+    # Ordena por total anual desc
+    tbl_evo["_TOTAL_ANO"] = tbl_evo.sum(axis=1)
+    tbl_evo = tbl_evo.sort_values("_TOTAL_ANO", ascending=False).drop(columns=["_TOTAL_ANO"])
+
+    # Formata R$
+    tbl_disp = tbl_evo.copy()
+    for c in tbl_disp.columns:
+        tbl_disp[c] = tbl_disp[c].apply(lambda v: "R$ " + format_brl(v))
+
+    tbl_disp = tbl_disp.reset_index().rename(columns={"CLIENTE_N": "CLIENTE"})
+    st.dataframe(tbl_disp, use_container_width=True, hide_index=True, height=520)
+
+
 
 st.divider()
 
