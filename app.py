@@ -1421,71 +1421,72 @@ else:
 
 
 # ============================================================
-# KPI: Evolução de Faturamento do Cliente (Jan → Dez)
-# - Mostra a evolução do CLIENTE selecionado no Drill.
-# - Se uma LINHA estiver selecionada em "LINHA do Cliente", aplica o filtro.
+# KPI: Evolução de Faturamento por Cliente (Jan → Dez)
+# - A seleção "LINHA do Cliente" (no Drill acima) filtra a evolução.
+# - Se LINHA do Cliente = (Todas), considera todas as linhas.
+# - Mostra TODOS os clientes (linhas) no modelo Cliente x Meses.
 # ============================================================
-st.subheader("Evolução de Faturamento do Cliente (Jan → Dez)")
+st.subheader("Evolução de Faturamento por Cliente (Jan → Dez)")
 
-# Precisa de cliente selecionado no Drill
-cliente_kpi = st.session_state.get("cliente_sel", "(Todos)")
 linha_kpi = st.session_state.get("linha_cli_sel", "(Todas)")
 
-if cliente_kpi == "(Todos)":
-    st.info("Selecione um **CLIENTE** no Drill acima para ver a evolução mês a mês.")
-else:
-    df_evo = df_f.copy()
-    df_evo = df_evo[df_evo["DATA"].notna()].copy()
-    df_evo = df_evo[df_evo["DATA"].dt.year == ANO_ATUAL].copy()
+df_evo = df_f.copy()
+df_evo = df_evo[df_evo["DATA"].notna()].copy()
 
-    # Cliente
-    df_evo = df_evo[df_evo["CLIENTE_N"] == cliente_kpi].copy()
+# Mantém o comportamento de "Jan → Dez" do ANO_ATUAL
+df_evo = df_evo[df_evo["DATA"].dt.year == ANO_ATUAL].copy()
 
-    # Linha (opcional)
+# Linha (opcional)
+if linha_kpi != "(Todas)":
+    df_evo = df_evo[df_evo["LINHA_N"] == linha_kpi].copy()
+
+if len(df_evo) == 0:
     if linha_kpi != "(Todas)":
-        df_evo = df_evo[df_evo["LINHA_N"] == linha_kpi].copy()
-
-    if len(df_evo) == 0:
-        if linha_kpi != "(Todas)":
-            st.info(f"Sem dados para **{cliente_kpi}** na linha **{linha_kpi}** no ano **{ANO_ATUAL}** para o recorte atual.")
-        else:
-            st.info(f"Sem dados para **{cliente_kpi}** no ano **{ANO_ATUAL}** para o recorte atual.")
+        st.info(f"Sem dados para o recorte atual na linha **{linha_kpi}** no ano **{ANO_ATUAL}**.")
     else:
-        df_evo["MES_NUM"] = df_evo["DATA"].dt.month
+        st.info(f"Sem dados para o recorte atual no ano **{ANO_ATUAL}**.")
+else:
+    df_evo["MES_NUM"] = df_evo["DATA"].dt.month
 
-        # Pivot: Cliente x Mês (VAL_COL já definido no app: VR_TOTAL_NUM ou FAT_LINHA)
-        tbl_evo = (
-            df_evo.groupby(["CLIENTE_N", "MES_NUM"], dropna=False)[VAL_COL]
-            .sum()
-            .reset_index()
-            .pivot(index="CLIENTE_N", columns="MES_NUM", values=VAL_COL)
-            .fillna(0.0)
-        )
+    # Pivot: Cliente x Mês (VAL_COL já definido no app: VR_TOTAL_NUM ou FAT_LINHA)
+    tbl_evo = (
+        df_evo.groupby(["CLIENTE_N", "MES_NUM"], dropna=False)[VAL_COL]
+        .sum()
+        .reset_index()
+        .pivot(index="CLIENTE_N", columns="MES_NUM", values=VAL_COL)
+        .fillna(0.0)
+    )
 
-        # Garante colunas 1..12
-        for m in range(1, 13):
-            if m not in tbl_evo.columns:
-                tbl_evo[m] = 0.0
-        tbl_evo = tbl_evo[[1,2,3,4,5,6,7,8,9,10,11,12]]
+    # Garante colunas 1..12
+    for m in range(1, 13):
+        if m not in tbl_evo.columns:
+            tbl_evo[m] = 0.0
+    tbl_evo = tbl_evo[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]
 
-        meses_full = {
-            1: "JANEIRO", 2: "FEVEREIRO", 3: "MARÇO", 4: "ABRIL",
-            5: "MAIO", 6: "JUNHO", 7: "JULHO", 8: "AGOSTO",
-            9: "SETEMBRO", 10: "OUTUBRO", 11: "NOVEMBRO", 12: "DEZEMBRO",
-        }
-        tbl_evo = tbl_evo.rename(columns=meses_full)
+    meses_full = {
+        1: "JANEIRO", 2: "FEVEREIRO", 3: "MARÇO", 4: "ABRIL",
+        5: "MAIO", 6: "JUNHO", 7: "JULHO", 8: "AGOSTO",
+        9: "SETEMBRO", 10: "OUTUBRO", 11: "NOVEMBRO", 12: "DEZEMBRO",
+    }
+    tbl_evo = tbl_evo.rename(columns=meses_full)
 
-        # Formata R$
-        tbl_disp = tbl_evo.copy()
-        for c in tbl_disp.columns:
-            tbl_disp[c] = tbl_disp[c].apply(lambda v: "R$ " + format_brl(v))
+    # Ordena por total do ano (maior → menor)
+    tbl_evo["_TOTAL_ANO"] = tbl_evo.sum(axis=1)
+    tbl_evo = tbl_evo.sort_values("_TOTAL_ANO", ascending=False).drop(columns=["_TOTAL_ANO"])
 
-        tbl_disp = tbl_disp.reset_index().rename(columns={"CLIENTE_N": "CLIENTE"})
-        if linha_kpi != "(Todas)":
-            st.caption(f"Filtro aplicado: **LINHA do Cliente = {linha_kpi}**")
-        st.dataframe(tbl_disp, use_container_width=True, hide_index=True, height=220)
+    # Formatação (R$)
+    tbl_disp = tbl_evo.copy()
+    for c in tbl_disp.columns:
+        tbl_disp[c] = tbl_disp[c].apply(lambda v: "R$ " + format_brl(v))
 
+    tbl_disp = tbl_disp.reset_index().rename(columns={"CLIENTE_N": "CLIENTE"})
 
+    if linha_kpi != "(Todas)":
+        st.caption(f"Filtro aplicado: **LINHA do Cliente = {linha_kpi}**")
+    else:
+        st.caption("Filtro aplicado: **LINHA do Cliente = (Todas)** (todas as linhas)")
+
+    st.dataframe(tbl_disp, use_container_width=True, hide_index=True, height=520)
 
 st.divider()
 
