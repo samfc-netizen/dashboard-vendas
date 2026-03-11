@@ -101,6 +101,35 @@ def pick_first_existing_col(df: pd.DataFrame, candidates: list[str]) -> str | No
     return None
 
 
+def month_to_num_pt(value) -> int | None:
+    key = canonical_key(value)
+    mapa = {
+        "JAN": 1, "JANEIRO": 1,
+        "FEV": 2, "FEVEREIRO": 2,
+        "MAR": 3, "MARCO": 3, "MARÇO": 3,
+        "ABR": 4, "ABRIL": 4,
+        "MAI": 5, "MAIO": 5,
+        "JUN": 6, "JUNHO": 6,
+        "JUL": 7, "JULHO": 7,
+        "AGO": 8, "AGOSTO": 8,
+        "SET": 9, "SETEMBRO": 9,
+        "OUT": 10, "OUTUBRO": 10,
+        "NOV": 11, "NOVEMBRO": 11,
+        "DEZ": 12, "DEZEMBRO": 12,
+    }
+    return mapa.get(key)
+
+
+def format_decimal_pt(v, casas: int = 1) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    try:
+        txt = f"{float(v):,.{casas}f}"
+        return txt.replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "—"
+
+
 MESES = [
     (1, "JAN"),
     (2, "FEV"),
@@ -115,48 +144,6 @@ MESES = [
     (11, "NOV"),
     (12, "DEZ"),
 ]
-
-
-MESES_FULL_TO_NUM = {
-    "JANEIRO": 1,
-    "FEVEREIRO": 2,
-    "MARCO": 3,
-    "MARÇO": 3,
-    "ABRIL": 4,
-    "MAIO": 5,
-    "JUNHO": 6,
-    "JULHO": 7,
-    "AGOSTO": 8,
-    "SETEMBRO": 9,
-    "OUTUBRO": 10,
-    "NOVEMBRO": 11,
-    "DEZEMBRO": 12,
-}
-
-MESES_NUM_TO_FULL = {
-    1: "JANEIRO",
-    2: "FEVEREIRO",
-    3: "MARÇO",
-    4: "ABRIL",
-    5: "MAIO",
-    6: "JUNHO",
-    7: "JULHO",
-    8: "AGOSTO",
-    9: "SETEMBRO",
-    10: "OUTUBRO",
-    11: "NOVEMBRO",
-    12: "DEZEMBRO",
-}
-
-
-def normalize_month_name(text: str) -> str:
-    if text is None:
-        return ""
-    s = str(text).strip().upper()
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = re.sub(r"[^A-Z]", "", s)
-    return s
 
 # Ordem desejada (UNAÍ por último)
 LOJA_KEY_ORDER = ["ADE", "GAMA", "SOFNORTE", "CEILANDIA", "SIA", "AGLINDAS", "GUARA", "LUZIANIA", "UNAI"]
@@ -393,137 +380,170 @@ def carregar_movimentacoes_compras():
     return df_compras, df_devol
 
 
+@st.cache_data(ttl=10)
+def carregar_referencias_planejamento():
+    def _read_first(candidates: list[str]) -> pd.DataFrame:
+        for sh in candidates:
+            try:
+                dfx = pd.read_excel(ARQUIVO_EXCEL, sheet_name=sh)
+                dfx.columns = dfx.columns.astype(str).str.strip()
+                return dfx
+            except Exception:
+                continue
+        return pd.DataFrame()
 
-# ========= Fixos / Parâmetros =========
+    def _wide_to_long(dfw: pd.DataFrame, value_name: str) -> pd.DataFrame:
+        if dfw is None or dfw.empty:
+            return pd.DataFrame(columns=["LOJA_KEY", "MES_NUM", "MES", value_name])
+
+        cols = list(dfw.columns)
+        if not cols:
+            return pd.DataFrame(columns=["LOJA_KEY", "MES_NUM", "MES", value_name])
+
+        month_col = cols[0]
+        loja_cols = [c for c in cols[1:] if canonical_key(c) not in {"ANO", "ANOBASE", "ANOATUAL"}]
+
+        out = dfw[[month_col] + loja_cols].copy()
+        out["MES_NUM"] = out[month_col].apply(month_to_num_pt)
+        out = out[out["MES_NUM"].notna()].copy()
+        if out.empty:
+            return pd.DataFrame(columns=["LOJA_KEY", "MES_NUM", "MES", value_name])
+
+        out = out.melt(id_vars=["MES_NUM"], value_vars=loja_cols, var_name="LOJA_RAW", value_name=value_name)
+        out["LOJA_KEY"] = out["LOJA_RAW"].apply(canonical_key)
+        out[value_name] = to_float_series(out[value_name])
+        out["MES_NUM"] = out["MES_NUM"].astype(int)
+        out["MES"] = out["MES_NUM"].map({m: nome for m, nome in MESES})
+        out = out[["LOJA_KEY", "MES_NUM", "MES", value_name]].copy()
+        return out
+
+    df_meta_raw = _read_first(["META DAUTO TINTAS", "METAS DAUTO TINTAS", "METAS"])
+    df_ano1_raw = _read_first(["ANO-1", "Ano-1", "ANO 1", "ANO1"])
+    df_dias_raw = _read_first(["DIAS ÚTEIS", "DIAS UTEIS"])
+
+    df_meta_long = _wide_to_long(df_meta_raw, "META")
+    df_ano1_long = _wide_to_long(df_ano1_raw, "VENDAS_2025")
+
+    dias_map = {}
+    if df_dias_raw is not None and not df_dias_raw.empty:
+        col_mes = pick_first_existing_col(df_dias_raw, ["MÊS", "MES"])
+        col_dias = pick_first_existing_col(df_dias_raw, ["DIAS ÚTEIS EQUIVALENTES", "DIAS UTEIS EQUIVALENTES", "DIAS ÚTEIS", "DIAS UTEIS", "DIAS"])
+        if col_mes is not None and col_dias is not None:
+            aux = df_dias_raw[[col_mes, col_dias]].copy()
+            aux["MES_NUM"] = aux[col_mes].apply(month_to_num_pt)
+            aux["DIAS_EQ"] = to_float_series(aux[col_dias])
+            aux = aux[aux["MES_NUM"].notna()].copy()
+            dias_map = {
+                int(r["MES_NUM"]): float(r["DIAS_EQ"])
+                for _, r in aux.iterrows()
+                if r["DIAS_EQ"] is not None and not (isinstance(r["DIAS_EQ"], float) and pd.isna(r["DIAS_EQ"]))
+            }
+
+    return df_meta_long, df_ano1_long, dias_map
+
+
+# ========= Fixos =========
 
 ANO_BASE = 2025
 ANO_ATUAL = 2026
 
+VENDAS_2025_FIXAS = {
+    "ADE": {1: parse_number_any("173.495,62"), 2: parse_number_any("161.844,31"), 3: parse_number_any("156.461,49"),
+            4: parse_number_any("160.042,31"), 5: parse_number_any("170.514,18"), 6: parse_number_any("127.951,77"),
+            7: parse_number_any("171.267,64"), 8: parse_number_any("141.435,62"), 9: parse_number_any("173.581,08"),
+            10: parse_number_any("129.854,69"), 11: parse_number_any("182.310,63"), 12: parse_number_any("110.305,86")},
+    "GAMA": {1: parse_number_any("126.149,09"), 2: parse_number_any("112.627,88"), 3: parse_number_any("112.145,06"),
+             4: parse_number_any("108.381,08"), 5: parse_number_any("113.956,72"), 6: parse_number_any("113.556,07"),
+             7: parse_number_any("169.342,44"), 8: parse_number_any("147.321,43"), 9: parse_number_any("145.956,09"),
+             10: parse_number_any("174.493,52"), 11: parse_number_any("143.130,29"), 12: parse_number_any("72.571,55")},
+    "SOFNORTE": {1: parse_number_any("159.358,73"), 2: parse_number_any("134.693,97"), 3: parse_number_any("145.117,53"),
+                 4: parse_number_any("173.621,70"), 5: parse_number_any("186.950,35"), 6: parse_number_any("156.154,16"),
+                 7: parse_number_any("235.304,73"), 8: parse_number_any("217.834,81"), 9: parse_number_any("166.037,32"),
+                 10: parse_number_any("161.261,52"), 11: parse_number_any("217.652,47"), 12: parse_number_any("98.613,61")},
+    "CEILANDIA": {1: parse_number_any("194.390,32"), 2: parse_number_any("184.944,70"), 3: parse_number_any("185.770,54"),
+                  4: parse_number_any("205.408,63"), 5: parse_number_any("228.472,84"), 6: parse_number_any("196.508,96"),
+                  7: parse_number_any("253.148,05"), 8: parse_number_any("171.602,48"), 9: parse_number_any("216.952,27"),
+                  10: parse_number_any("222.850,50"), 11: parse_number_any("251.524,47"), 12: parse_number_any("166.248,52")},
+    "SIA": {1: parse_number_any("251.137,54"), 2: parse_number_any("230.566,96"), 3: parse_number_any("227.002,61"),
+            4: parse_number_any("244.790,56"), 5: parse_number_any("237.861,78"), 6: parse_number_any("238.836,13"),
+            7: parse_number_any("322.817,82"), 8: parse_number_any("222.557,71"), 9: parse_number_any("237.103,03"),
+            10: parse_number_any("268.726,51"), 11: parse_number_any("261.805,42"), 12: parse_number_any("181.533,68")},
+    "UNAI": {1: parse_number_any("105.139,34"), 2: parse_number_any("76.559,01"), 3: parse_number_any("89.579,81"),
+             4: parse_number_any("110.549,31"), 5: parse_number_any("114.805,18"), 6: parse_number_any("106.100,04"),
+             7: parse_number_any("132.666,72"), 8: parse_number_any("101.520,16"), 9: parse_number_any("115.579,91"),
+             10: parse_number_any("94.022,74"), 11: parse_number_any("118.884,79"), 12: parse_number_any("86.025,19")},
+    "AGLINDAS": {1: parse_number_any("93.433,31"), 2: parse_number_any("97.394,14"), 3: parse_number_any("111.490,33"),
+                 4: parse_number_any("98.982,15"), 5: parse_number_any("113.704,23"), 6: parse_number_any("80.362,14"),
+                 7: parse_number_any("116.011,78"), 8: parse_number_any("90.763,40"), 9: parse_number_any("100.906,32"),
+                 10: parse_number_any("102.186,12"), 11: parse_number_any("99.542,13"), 12: parse_number_any("77.361,44")},
+    "GUARA": {1: parse_number_any("224.115,64"), 2: parse_number_any("171.978,22"), 3: parse_number_any("184.169,25"),
+              4: parse_number_any("175.469,30"), 5: parse_number_any("217.827,60"), 6: parse_number_any("211.533,27"),
+              7: parse_number_any("237.466,11"), 8: parse_number_any("188.321,52"), 9: parse_number_any("185.359,79"),
+              10: parse_number_any("216.227,79"), 11: parse_number_any("201.134,31"), 12: parse_number_any("145.289,81")},
+    "LUZIANIA": {1: parse_number_any("238.008,58"), 2: parse_number_any("211.472,43"), 3: parse_number_any("231.544,50"),
+                 4: parse_number_any("214.753,08"), 5: parse_number_any("283.003,12"), 6: parse_number_any("257.304,71"),
+                 7: parse_number_any("319.198,39"), 8: parse_number_any("234.667,93"), 9: parse_number_any("239.019,20"),
+                 10: parse_number_any("269.826,56"), 11: parse_number_any("348.121,51"), 12: parse_number_any("237.419,56")},
+}
 
-@st.cache_data(ttl=10)
-def carregar_base_pivot_sheet(sheet_name: str, value_col_name: str) -> tuple[pd.DataFrame, int | None]:
-    """
-    Lê abas no formato:
-    Mês | LOJAS... | ANO
-    e devolve:
-    LOJA_KEY | MES_NUM | MES | <value_col_name>
-    """
-    try:
-        dfp = pd.read_excel(ARQUIVO_EXCEL, sheet_name=sheet_name)
-    except Exception:
-        return pd.DataFrame(columns=["LOJA_KEY", "MES_NUM", "MES", value_col_name]), None
-
-    if dfp is None or dfp.empty:
-        return pd.DataFrame(columns=["LOJA_KEY", "MES_NUM", "MES", value_col_name]), None
-
-    dfp.columns = dfp.columns.astype(str).str.strip()
-
-    col_mes = pick_first_existing_col(dfp, ["MÊS", "MES", "LOJA"])
-    col_ano = pick_first_existing_col(dfp, ["ANO"])
-
-    ano_ref = None
-    if col_ano is not None:
-        ano_vals = pd.to_numeric(dfp[col_ano], errors="coerce").dropna()
-        if len(ano_vals):
-            ano_ref = int(ano_vals.iloc[0])
-
-    loja_cols = [c for c in dfp.columns if c not in {col_mes, col_ano}]
-
-    rows = []
-    for _, r in dfp.iterrows():
-        mes_raw = r[col_mes] if col_mes is not None else None
-        mes_norm = normalize_month_name(mes_raw)
-        mes_num = MESES_FULL_TO_NUM.get(mes_norm)
-        if mes_num is None:
-            continue
-        mes_sigla = {m: nome for m, nome in MESES}.get(mes_num, "")
-        for c in loja_cols:
-            loja_key = canonical_key(c)
-            val = parse_number_any(r[c])
-            rows.append({
-                "LOJA_KEY": loja_key,
-                "MES_NUM": mes_num,
-                "MES": mes_sigla,
-                value_col_name: float(val or 0.0),
-            })
-
-    out = pd.DataFrame(rows)
-    if out.empty:
-        out = pd.DataFrame(columns=["LOJA_KEY", "MES_NUM", "MES", value_col_name])
-    return out, ano_ref
-
-
-@st.cache_data(ttl=10)
-def carregar_dias_uteis():
-    try:
-        dfd = pd.read_excel(ARQUIVO_EXCEL, sheet_name="DIAS ÚTEIS")
-    except Exception:
-        return pd.DataFrame(columns=["MES_NUM", "MES_FULL", "DIAS_UTEIS"])
-
-    if dfd is None or dfd.empty:
-        return pd.DataFrame(columns=["MES_NUM", "MES_FULL", "DIAS_UTEIS"])
-
-    dfd.columns = dfd.columns.astype(str).str.strip()
-    col_mes = pick_first_existing_col(dfd, ["MÊS", "MES"])
-    col_dias = pick_first_existing_col(dfd, ["DIAS ÚTEIS EQUIVALENTES", "DIAS UTEIS EQUIVALENTES", "DIAS ÚTEIS", "DIAS UTEIS"])
-
-    rows = []
-    if col_mes is None or col_dias is None:
-        return pd.DataFrame(columns=["MES_NUM", "MES_FULL", "DIAS_UTEIS"])
-
-    for _, r in dfd.iterrows():
-        mes_norm = normalize_month_name(r[col_mes])
-        mes_num = MESES_FULL_TO_NUM.get(mes_norm)
-        dias = parse_number_any(r[col_dias])
-        if mes_num is None:
-            continue
-        rows.append({
-            "MES_NUM": mes_num,
-            "MES_FULL": MESES_NUM_TO_FULL.get(mes_num, ""),
-            "DIAS_UTEIS": float(dias or 0.0),
-        })
-
-    return pd.DataFrame(rows)
+METAS_FIXAS = {
+    "ADE": {1: parse_number_any("190.081,41"), 2: parse_number_any("161.771,41"), 3: parse_number_any("194.125,70"),
+            4: parse_number_any("177.948,56"), 5: parse_number_any("181.992,84"), 6: parse_number_any("186.037,13"),
+            7: parse_number_any("226.479,98"), 8: parse_number_any("190.081,41"), 9: parse_number_any("186.037,13"),
+            10: parse_number_any("190.081,41"), 11: parse_number_any("195.338,98"), 12: parse_number_any("190.081,41")},
+    "GAMA": {1: parse_number_any("186.541,42"), 2: parse_number_any("158.758,66"), 3: parse_number_any("190.510,39"),
+             4: parse_number_any("174.634,52"), 5: parse_number_any("178.603,49"), 6: parse_number_any("182.572,45"),
+             7: parse_number_any("222.262,12"), 8: parse_number_any("186.541,42"), 9: parse_number_any("182.572,45"),
+             10: parse_number_any("186.541,42"), 11: parse_number_any("191.701,08"), 12: parse_number_any("186.541,42")},
+    "LUZIANIA": {1: parse_number_any("304.446,33"), 2: parse_number_any("259.103,26"), 3: parse_number_any("310.923,91"),
+                 4: parse_number_any("285.013,58"), 5: parse_number_any("291.491,16"), 6: parse_number_any("297.968,74"),
+                 7: parse_number_any("362.744,56"), 8: parse_number_any("304.446,33"), 9: parse_number_any("297.968,74"),
+                 10: parse_number_any("304.446,33"), 11: parse_number_any("312.867,18"), 12: parse_number_any("304.446,33")},
+    "SOFNORTE": {1: parse_number_any("217.392,69"), 2: parse_number_any("185.015,06"), 3: parse_number_any("222.018,07"),
+                 4: parse_number_any("203.516,56"), 5: parse_number_any("208.141,94"), 6: parse_number_any("212.767,32"),
+                 7: parse_number_any("259.021,08"), 8: parse_number_any("217.392,69"), 9: parse_number_any("212.767,32"),
+                 10: parse_number_any("217.392,69"), 11: parse_number_any("223.405,68"), 12: parse_number_any("217.392,69")},
+    "CEILANDIA": {1: parse_number_any("239.467,06"), 2: parse_number_any("203.801,75"), 3: parse_number_any("244.562,10"),
+                  4: parse_number_any("224.181,93"), 5: parse_number_any("229.276,97"), 6: parse_number_any("234.372,01"),
+                  7: parse_number_any("285.322,45"), 8: parse_number_any("239.467,06"), 9: parse_number_any("234.372,01"),
+                  10: parse_number_any("239.467,06"), 11: parse_number_any("246.090,61"), 12: parse_number_any("239.467,06")},
+    "SIA": {1: parse_number_any("285.285,01"), 2: parse_number_any("242.795,75"), 3: parse_number_any("291.354,90"),
+            4: parse_number_any("267.075,33"), 5: parse_number_any("273.145,22"), 6: parse_number_any("279.215,11"),
+            7: parse_number_any("339.914,05"), 8: parse_number_any("285.285,01"), 9: parse_number_any("279.215,11"),
+            10: parse_number_any("285.285,01"), 11: parse_number_any("293.175,87"), 12: parse_number_any("285.285,01")},
+    "UNAI": {1: parse_number_any("121.856,43"), 2: parse_number_any("103.707,60"), 3: parse_number_any("124.449,12"),
+             4: parse_number_any("114.078,36"), 5: parse_number_any("116.671,05"), 6: parse_number_any("119.263,74"),
+             7: parse_number_any("145.190,64"), 8: parse_number_any("121.856,43"), 9: parse_number_any("119.263,74"),
+             10: parse_number_any("121.856,43"), 11: parse_number_any("125.226,93"), 12: parse_number_any("121.856,43")},
+    "AGLINDAS": {1: parse_number_any("118.232,45"), 2: parse_number_any("100.623,36"), 3: parse_number_any("120.748,04"),
+                 4: parse_number_any("110.685,70"), 5: parse_number_any("113.201,28"), 6: parse_number_any("115.716,87"),
+                 7: parse_number_any("140.872,71"), 8: parse_number_any("118.232,45"), 9: parse_number_any("115.716,87"),
+                 10: parse_number_any("118.232,45"), 11: parse_number_any("121.502,71"), 12: parse_number_any("118.232,45")},
+    "GUARA": {1: parse_number_any("226.846,86"), 2: parse_number_any("193.061,16"), 3: parse_number_any("231.673,39"),
+              4: parse_number_any("212.367,28"), 5: parse_number_any("217.193,81"), 6: parse_number_any("222.020,33"),
+              7: parse_number_any("270.285,62"), 8: parse_number_any("226.846,86"), 9: parse_number_any("222.020,33"),
+              10: parse_number_any("226.846,86"), 11: parse_number_any("233.121,35"), 12: parse_number_any("226.846,86")},
+}
 
 
 def montar_df_2025_fixo(lojas_keys):
-    df_ano1, _ = carregar_base_pivot_sheet("ANO-1", "VENDAS_2025")
-    if df_ano1.empty:
-        rows = []
-        for loja_key in lojas_keys:
-            for mes_num, mes_nome in MESES:
-                rows.append({"LOJA_KEY": loja_key, "MES_NUM": mes_num, "MES": mes_nome, "VENDAS_2025": 0.0})
-        return pd.DataFrame(rows)
-
-    out = df_ano1[df_ano1["LOJA_KEY"].isin(lojas_keys)].copy()
-    if out.empty:
-        rows = []
-        for loja_key in lojas_keys:
-            for mes_num, mes_nome in MESES:
-                rows.append({"LOJA_KEY": loja_key, "MES_NUM": mes_num, "MES": mes_nome, "VENDAS_2025": 0.0})
-        return pd.DataFrame(rows)
-
-    return out
+    rows = []
+    for loja_key in lojas_keys:
+        mapa_mes = VENDAS_2025_FIXAS.get(loja_key, {})
+        for mes_num, mes_nome in MESES:
+            val = float(mapa_mes.get(mes_num, 0.0) or 0.0)
+            rows.append({"LOJA_KEY": loja_key, "MES_NUM": mes_num, "MES": mes_nome, "VENDAS_2025": val})
+    return pd.DataFrame(rows)
 
 
 def montar_df_metas_fixas(lojas_keys):
-    df_meta_sheet, _ = carregar_base_pivot_sheet("META DAUTO TINTAS", "META")
-    if df_meta_sheet.empty:
-        rows = []
-        for loja_key in lojas_keys:
-            for mes_num, mes_nome in MESES:
-                rows.append({"LOJA_KEY": loja_key, "MES_NUM": mes_num, "MES": mes_nome, "META": 0.0})
-        return pd.DataFrame(rows)
-
-    out = df_meta_sheet[df_meta_sheet["LOJA_KEY"].isin(lojas_keys)].copy()
-    if out.empty:
-        rows = []
-        for loja_key in lojas_keys:
-            for mes_num, mes_nome in MESES:
-                rows.append({"LOJA_KEY": loja_key, "MES_NUM": mes_num, "MES": mes_nome, "META": 0.0})
-        return pd.DataFrame(rows)
-
-    return out
+    rows = []
+    for loja_key in lojas_keys:
+        mapa_mes = METAS_FIXAS.get(loja_key, {})
+        for mes_num, mes_nome in MESES:
+            val = float(mapa_mes.get(mes_num, 0.0) or 0.0)
+            rows.append({"LOJA_KEY": loja_key, "MES_NUM": mes_num, "MES": mes_nome, "META": val})
+    return pd.DataFrame(rows)
 
 
 # =========================
@@ -531,22 +551,6 @@ def montar_df_metas_fixas(lojas_keys):
 # =========================
 df = carregar_dados()
 df = df[df["FAT_LINHA"].notna()].copy()
-
-
-# ========= Anos de referência (abas auxiliares) =========
-_df_meta_anos, _ano_meta_sheet = carregar_base_pivot_sheet("META DAUTO TINTAS", "META")
-_df_ano1_ref, _ano_ano1_sheet = carregar_base_pivot_sheet("ANO-1", "VENDAS_2025")
-if _ano_meta_sheet is not None:
-    ANO_ATUAL = _ano_meta_sheet
-elif df["DATA"].notna().any():
-    ANO_ATUAL = int(df["DATA"].dt.year.max())
-
-if _ano_ano1_sheet is not None:
-    ANO_BASE = _ano_ano1_sheet
-else:
-    ANO_BASE = ANO_ATUAL - 1 if ANO_ATUAL else 2025
-
-dias_uteis_df = carregar_dias_uteis()
 
 # ========= Define a métrica de valor do cliente =========
 use_vr_total = df["VR_TOTAL_NUM"].notna().any()
@@ -684,71 +688,49 @@ st.markdown("### Meta × Realizado")
 df_meta = montar_df_metas_fixas(lojas_keys_aplicadas)
 df_meta_sel = df_meta[df_meta["MES_NUM"].isin(mes_nums_sel)].copy()
 
-
 meta_total_sel = float(df_meta_sel["META"].sum()) if len(df_meta_sel) else 0.0
 real_total_sel = float(df_mes["VENDAS_2026"].sum()) if len(df_mes) else 0.0
 
-# ===== Previsão de faturamento por dias úteis =====
-df_prev_base = df.copy()
-df_prev_base = df_prev_base[df_prev_base["DATA"].notna()].copy()
-df_prev_base = df_prev_base[df_prev_base["DATA"].dt.year == ANO_ATUAL].copy()
-if lojas_sel_aplicadas:
-    df_prev_base = df_prev_base[df_prev_base["LOJA_N"].isin(lojas_sel_aplicadas)].copy()
+# ===== Previsão de fechamento (média do realizado / dias de venda equivalentes)
+_df_meta_ref, _df_ano1_ref, dias_uteis_map = carregar_referencias_planejamento()
+df_prev = df_f.copy()
+df_prev = df_prev[df_prev["DATA"].notna()].copy()
+df_prev = df_prev[df_prev["DATA"].dt.month.isin(mes_nums_sel)].copy()
+
+if len(df_prev):
+    diaria_prev = (
+        df_prev.assign(DATA_DIA=df_prev["DATA"].dt.normalize())
+        .groupby("DATA_DIA", as_index=False)
+        .agg(FAT_DIA=("FAT_LINHA", "sum"))
+    )
+    diaria_prev["PESO_DIA"] = diaria_prev["DATA_DIA"].dt.dayofweek.map(lambda x: 0.5 if x == 5 else 1.0)
+    diaria_prev["PESO_DIA"] = diaria_prev["PESO_DIA"].fillna(1.0)
+    diaria_prev_valid = diaria_prev[diaria_prev["FAT_DIA"] > 0].copy()
 else:
-    df_prev_base = df_prev_base.iloc[0:0].copy()
+    diaria_prev = pd.DataFrame(columns=["DATA_DIA", "FAT_DIA", "PESO_DIA"])
+    diaria_prev_valid = diaria_prev.copy()
 
-df_prev_base = df_prev_base[(df_prev_base["DATA"].dt.date >= data_ini) & (df_prev_base["DATA"].dt.date <= data_fim)].copy()
-df_prev_base = df_prev_base[df_prev_base["DATA"].dt.month.isin(mes_nums_sel)].copy()
-
-if len(df_prev_base):
-    prev_rows = (
-        df_prev_base.assign(
-            MES_NUM=df_prev_base["DATA"].dt.month,
-            DIA=df_prev_base["DATA"].dt.date,
-        )
-        .groupby(["MES_NUM", "DIA"], dropna=False, as_index=False)["FAT_LINHA"]
-        .sum()
-        .rename(columns={"FAT_LINHA": "FAT_DIA"})
-    )
-
-    prev_rows_validos = prev_rows[prev_rows["FAT_DIA"] > 0].copy()
-
-    fat_atual_periodo = float(prev_rows_validos["FAT_DIA"].sum()) if len(prev_rows_validos) else 0.0
-    dias_com_venda = int(len(prev_rows_validos))
-    media_dia_com_venda = (fat_atual_periodo / dias_com_venda) if dias_com_venda > 0 else 0.0
-
-    prev_mes = (
-        prev_rows_validos.groupby("MES_NUM", dropna=False, as_index=False)["FAT_DIA"]
-        .agg(FAT_ATUAL="sum", DIAS_COM_VENDA="count")
-    )
-    prev_mes["MEDIA_DIA_VENDA"] = prev_mes.apply(
-        lambda r: (r["FAT_ATUAL"] / r["DIAS_COM_VENDA"]) if r["DIAS_COM_VENDA"] not in (0, None) else 0.0,
-        axis=1,
-    )
-else:
-    prev_rows = pd.DataFrame(columns=["MES_NUM", "DIA", "FAT_DIA"])
-    prev_rows_validos = pd.DataFrame(columns=["MES_NUM", "DIA", "FAT_DIA"])
-    fat_atual_periodo = 0.0
-    dias_com_venda = 0
-    media_dia_com_venda = 0.0
-    prev_mes = pd.DataFrame(columns=["MES_NUM", "FAT_ATUAL", "DIAS_COM_VENDA", "MEDIA_DIA_VENDA"])
-
-prev_mes = prev_mes.merge(dias_uteis_df[["MES_NUM", "DIAS_UTEIS"]], on="MES_NUM", how="left")
-prev_mes["DIAS_UTEIS"] = pd.to_numeric(prev_mes["DIAS_UTEIS"], errors="coerce").fillna(0.0)
-prev_mes["PREVISAO_FECHAMENTO"] = prev_mes["MEDIA_DIA_VENDA"] * prev_mes["DIAS_UTEIS"]
-previsao_fechamento_total = float(prev_mes["PREVISAO_FECHAMENTO"].sum()) if len(prev_mes) else 0.0
-
-c_prev1, c_prev2, c_prev3 = st.columns(3)
-with c_prev1:
-    st.metric("Faturamento Atual (R$)", "R$ " + format_brl(real_total_sel))
-with c_prev2:
-    st.metric("Média por Dia com Venda (R$)", "R$ " + format_brl(media_dia_com_venda))
-with c_prev3:
-    st.metric("Previsão de Fechamento (R$)", "R$ " + format_brl(previsao_fechamento_total))
+dias_venda_equiv = float(diaria_prev_valid["PESO_DIA"].sum()) if len(diaria_prev_valid) else 0.0
+media_por_dia_venda = (real_total_sel / dias_venda_equiv) if dias_venda_equiv > 0 else None
+dias_uteis_equiv = float(sum(float(dias_uteis_map.get(m, 0.0) or 0.0) for m in mes_nums_sel))
+previsao_fechamento = (media_por_dia_venda * dias_uteis_equiv) if media_por_dia_venda is not None and dias_uteis_equiv > 0 else None
 
 pct_meta = (real_total_sel / meta_total_sel * 100) if meta_total_sel != 0 else None
 dif_meta_r = real_total_sel - meta_total_sel
 dif_meta_p = (dif_meta_r / meta_total_sel * 100) if meta_total_sel != 0 else None
+
+st.markdown("#### Realizado e Previsão")
+pc1, pc2, pc3, pc4 = st.columns(4)
+with pc1:
+    st.metric("Faturamento Atual (R$)", "R$ " + format_brl(real_total_sel))
+with pc2:
+    st.metric("Dias de Venda", format_decimal_pt(dias_venda_equiv, 1))
+with pc3:
+    st.metric("Média por Dia de Venda", ("R$ " + format_brl(media_por_dia_venda)) if media_por_dia_venda is not None else "—")
+with pc4:
+    st.metric("Previsão de Fechamento", ("R$ " + format_brl(previsao_fechamento)) if previsao_fechamento is not None else "—")
+
+st.caption("Dias de venda consideram apenas datas com faturamento acima de zero. Aos sábados, cada dia conta como 0,5.")
 
 a1, a2, a3 = st.columns([1.0, 1.0, 1.6], gap="large")
 with a1:
@@ -1092,97 +1074,89 @@ with st.expander("Ver produtos (CÓD + Descrição)"):
         prod_view["QTD"] = prod_view["QTD"].apply(lambda v: format_brl(v))
         st.dataframe(prod_view[["CÓD", "DESCRIÇÃO", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=520)
 
+st.subheader("Indicador: Marcas × Loja")
 
-
-# ============================================================
-# Marcas × Loja
-# ============================================================
-st.subheader("Marcas × Loja")
-
-marcas_loja_opts = sorted([x for x in df_f["MARCA_N"].dropna().astype(str).unique() if str(x).strip() != ""])
-marcas_loja_sel = st.multiselect(
+marcas_mxl = sorted([x for x in df_f["MARCA_N"].dropna().astype(str).unique() if str(x).strip() != ""])
+marcas_sel_mxl = st.multiselect(
     "Selecione uma ou mais marcas",
-    options=marcas_loja_opts,
+    options=marcas_mxl,
     default=[],
     key="marcas_x_loja_sel",
 )
 
-if len(marcas_loja_sel) == 0:
-    st.info("Selecione ao menos uma marca para ver o indicador Marcas × Loja.")
+if len(marcas_sel_mxl) == 0:
+    st.info("Selecione ao menos uma marca para ver o ranking das lojas, as linhas e os produtos.")
 else:
-    df_marcas_loja = df_f[df_f["MARCA_N"].isin(marcas_loja_sel)].copy()
+    df_mxl = df_f[df_f["MARCA_N"].isin(marcas_sel_mxl)].copy()
 
-    mxl_lojas = (
-        df_marcas_loja.groupby("LOJA_N", dropna=False)["FAT_LINHA"]
-        .sum()
-        .reset_index()
-        .sort_values("FAT_LINHA", ascending=False)
-        .rename(columns={"LOJA_N": "LOJA", "FAT_LINHA": "Faturamento"})
-    )
+    c_mxl_1, c_mxl_2 = st.columns([1.1, 1.2], gap="large")
 
-    mxl_lojas["_LOJA_KEY"] = mxl_lojas["LOJA"].astype(str).apply(canonical_key)
-    mxl_lojas["_LOJA_ORD"] = mxl_lojas["_LOJA_KEY"].map(lambda k: LOJA_KEY_RANK.get(k, DEFAULT_RANK)).astype(int)
-    mxl_lojas = mxl_lojas.sort_values(["Faturamento", "_LOJA_ORD"], ascending=[False, True]).drop(columns=["_LOJA_KEY", "_LOJA_ORD"])
-
-    mxl_total = float(mxl_lojas["Faturamento"].sum()) if len(mxl_lojas) else 0.0
-
-    c_mxl1, c_mxl2 = st.columns([1.2, 1.0], gap="large")
-    with c_mxl1:
-        st.markdown("#### Ranking de Lojas (marcas selecionadas)")
-        mxl_lojas_view = mxl_lojas.copy()
-        mxl_lojas_view["Faturamento (R$)"] = mxl_lojas_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-        st.dataframe(mxl_lojas_view[["LOJA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=360)
-        st.caption("Total das marcas selecionadas: R$ " + format_brl(mxl_total))
-
-    with c_mxl2:
-        fig_mxl = px.bar(
-            mxl_lojas,
-            x="LOJA",
-            y="Faturamento",
-            title="Faturamento por Loja (marcas selecionadas)",
+    with c_mxl_1:
+        lojas_mxl = (
+            df_mxl.groupby("LOJA_N", dropna=False)[VAL_COL]
+            .sum()
+            .reset_index()
+            .rename(columns={"LOJA_N": "LOJA", VAL_COL: "Faturamento"})
+            .sort_values("Faturamento", ascending=False)
         )
-        fig_mxl.update_layout(xaxis_tickangle=-30, yaxis_title="Faturamento (R$)", xaxis_title="Loja")
+        lojas_mxl_view = lojas_mxl.copy()
+        lojas_mxl_view["Faturamento (R$)"] = lojas_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+        st.markdown("#### Ranking das Lojas")
+        st.dataframe(lojas_mxl_view[["LOJA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=360)
+
+    with c_mxl_2:
+        fig_mxl = px.bar(
+            lojas_mxl.head(15),
+            x="Faturamento",
+            y="LOJA",
+            orientation="h",
+            title="Faturamento por Loja das Marcas Selecionadas",
+        )
+        fig_mxl.update_layout(
+            yaxis={"categoryorder": "total ascending"},
+            xaxis_title="Faturamento (R$)",
+            yaxis_title="Loja",
+        )
         st.plotly_chart(fig_mxl, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
-    mxl_linhas = (
-        df_marcas_loja.groupby("LINHA_N", dropna=False)
-        .agg(FATURAMENTO=("FAT_LINHA", "sum"), QTD=("QTD_NUM", "sum"))
+    linhas_mxl = (
+        df_mxl.groupby("LINHA_N", dropna=False)[VAL_COL]
+        .sum()
         .reset_index()
-        .rename(columns={"LINHA_N": "LINHA"})
-        .sort_values("FATURAMENTO", ascending=False)
+        .rename(columns={"LINHA_N": "LINHA", VAL_COL: "Faturamento"})
+        .sort_values("Faturamento", ascending=False)
     )
+    linhas_mxl_view = linhas_mxl.copy()
+    linhas_mxl_view["Faturamento (R$)"] = linhas_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
 
-    st.markdown("#### Linhas das marcas selecionadas")
-    mxl_linhas_view = mxl_linhas.copy()
-    mxl_linhas_view["Faturamento (R$)"] = mxl_linhas_view["FATURAMENTO"].apply(lambda v: "R$ " + format_brl(v))
-    mxl_linhas_view["QTD"] = mxl_linhas_view["QTD"].apply(lambda v: format_brl(v))
-    st.dataframe(mxl_linhas_view[["LINHA", "Faturamento (R$)", "QTD"]], use_container_width=True, hide_index=True, height=320)
+    lm1, lm2 = st.columns([1.1, 1.3], gap="large")
+    with lm1:
+        st.markdown("#### Linhas das Marcas Selecionadas")
+        st.dataframe(linhas_mxl_view[["LINHA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=360)
 
-    linhas_mxl_opts = mxl_linhas["LINHA"].tolist()
-    linha_mxl_sel = st.selectbox(
-        "Selecione a linha para detalhar os produtos",
-        options=linhas_mxl_opts,
-        index=0 if len(linhas_mxl_opts) else None,
-        key="linha_marcas_x_loja_sel",
-    ) if len(linhas_mxl_opts) else None
+    with lm2:
+        linhas_opts_mxl = linhas_mxl["LINHA"].tolist()
+        linha_sel_mxl = st.selectbox(
+            "Selecione a linha para detalhar os produtos",
+            options=linhas_opts_mxl,
+            index=0 if len(linhas_opts_mxl) else None,
+            key="linha_sel_marcas_x_loja",
+        ) if len(linhas_opts_mxl) else None
 
-    if linha_mxl_sel is not None:
-        df_mxl_prod = df_marcas_loja[df_marcas_loja["LINHA_N"] == linha_mxl_sel].copy()
-
-        prod_mxl = (
-            df_mxl_prod.groupby(["COD_N", "DESC_N"], dropna=False)
-            .agg(FATURAMENTO=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
-            .reset_index()
-            .rename(columns={"COD_N": "CÓD", "DESC_N": "DESCRIÇÃO"})
-            .sort_values("FATURAMENTO", ascending=False)
-        )
-
-        prod_mxl_view = prod_mxl.copy()
-        prod_mxl_view["Faturamento (R$)"] = prod_mxl_view["FATURAMENTO"].apply(lambda v: "R$ " + format_brl(v))
-        prod_mxl_view["QTD"] = prod_mxl_view["QTD"].apply(lambda v: format_brl(v))
-
-        st.markdown(f"#### Produtos da linha: {linha_mxl_sel}")
-        st.dataframe(prod_mxl_view[["CÓD", "DESCRIÇÃO", "Faturamento (R$)", "QTD"]], use_container_width=True, hide_index=True, height=420)
+        if linha_sel_mxl is not None:
+            df_prod_mxl = df_mxl[df_mxl["LINHA_N"] == linha_sel_mxl].copy()
+            prod_mxl = (
+                df_prod_mxl.groupby(["COD_N", "DESC_N"], dropna=False)
+                .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
+                .reset_index()
+                .rename(columns={"COD_N": "CÓD", "DESC_N": "DESCRIÇÃO"})
+                .sort_values("VALOR", ascending=False)
+            )
+            prod_mxl_view = prod_mxl.copy()
+            prod_mxl_view["VALOR (R$)"] = prod_mxl_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
+            prod_mxl_view["QTD"] = prod_mxl_view["QTD"].apply(lambda v: format_brl(v))
+            st.markdown(f"#### Produtos da Linha: {linha_sel_mxl}")
+            st.dataframe(prod_mxl_view[["CÓD", "DESCRIÇÃO", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=360)
 
 st.divider()
 
