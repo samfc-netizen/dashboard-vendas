@@ -701,20 +701,6 @@ df_prev_base = df_prev_base[(df_prev_base["DATA"].dt.date >= data_ini) & (df_pre
 df_prev_base = df_prev_base[df_prev_base["DATA"].dt.month.isin(mes_nums_sel)].copy()
 
 if len(df_prev_base):
-    df_prev_diario = (
-        df_prev_base.groupby(df_prev_base["DATA"].dt.date)["FAT_LINHA"]
-        .sum()
-        .reset_index()
-        .rename(columns={"DATA": "DIA", "FAT_LINHA": "FAT_DIA"})
-    )
-    dias_com_venda = int((df_prev_diario["FAT_DIA"] > 0).sum())
-    media_dia_com_venda = float(df_prev_diario.loc[df_prev_diario["FAT_DIA"] > 0, "FAT_DIA"].mean()) if dias_com_venda > 0 else 0.0
-else:
-    df_prev_diario = pd.DataFrame(columns=["DIA", "FAT_DIA"])
-    dias_com_venda = 0
-    media_dia_com_venda = 0.0
-
-if len(df_prev_base):
     prev_rows = (
         df_prev_base.assign(
             MES_NUM=df_prev_base["DATA"].dt.month,
@@ -724,14 +710,28 @@ if len(df_prev_base):
         .sum()
         .rename(columns={"FAT_LINHA": "FAT_DIA"})
     )
-    prev_rows = prev_rows[prev_rows["FAT_DIA"] > 0].copy()
+
+    prev_rows_validos = prev_rows[prev_rows["FAT_DIA"] > 0].copy()
+
+    fat_atual_periodo = float(prev_rows_validos["FAT_DIA"].sum()) if len(prev_rows_validos) else 0.0
+    dias_com_venda = int(len(prev_rows_validos))
+    media_dia_com_venda = (fat_atual_periodo / dias_com_venda) if dias_com_venda > 0 else 0.0
 
     prev_mes = (
-        prev_rows.groupby("MES_NUM", dropna=False, as_index=False)["FAT_DIA"]
-        .agg(MEDIA_DIA_VENDA="mean", DIAS_COM_VENDA="count")
+        prev_rows_validos.groupby("MES_NUM", dropna=False, as_index=False)["FAT_DIA"]
+        .agg(FAT_ATUAL="sum", DIAS_COM_VENDA="count")
+    )
+    prev_mes["MEDIA_DIA_VENDA"] = prev_mes.apply(
+        lambda r: (r["FAT_ATUAL"] / r["DIAS_COM_VENDA"]) if r["DIAS_COM_VENDA"] not in (0, None) else 0.0,
+        axis=1,
     )
 else:
-    prev_mes = pd.DataFrame(columns=["MES_NUM", "MEDIA_DIA_VENDA", "DIAS_COM_VENDA"])
+    prev_rows = pd.DataFrame(columns=["MES_NUM", "DIA", "FAT_DIA"])
+    prev_rows_validos = pd.DataFrame(columns=["MES_NUM", "DIA", "FAT_DIA"])
+    fat_atual_periodo = 0.0
+    dias_com_venda = 0
+    media_dia_com_venda = 0.0
+    prev_mes = pd.DataFrame(columns=["MES_NUM", "FAT_ATUAL", "DIAS_COM_VENDA", "MEDIA_DIA_VENDA"])
 
 prev_mes = prev_mes.merge(dias_uteis_df[["MES_NUM", "DIAS_UTEIS"]], on="MES_NUM", how="left")
 prev_mes["DIAS_UTEIS"] = pd.to_numeric(prev_mes["DIAS_UTEIS"], errors="coerce").fillna(0.0)
