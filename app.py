@@ -716,17 +716,19 @@ else:
 
 if len(df_prev_base):
     prev_rows = (
-        df_prev_base.groupby([df_prev_base["DATA"].dt.month, df_prev_base["DATA"].dt.date])["FAT_LINHA"]
+        df_prev_base.assign(
+            MES_NUM=df_prev_base["DATA"].dt.month,
+            DIA=df_prev_base["DATA"].dt.date,
+        )
+        .groupby(["MES_NUM", "DIA"], dropna=False, as_index=False)["FAT_LINHA"]
         .sum()
-        .reset_index()
+        .rename(columns={"FAT_LINHA": "FAT_DIA"})
     )
-    prev_rows.columns = ["MES_NUM", "DIA", "FAT_DIA"]
     prev_rows = prev_rows[prev_rows["FAT_DIA"] > 0].copy()
 
     prev_mes = (
-        prev_rows.groupby("MES_NUM", dropna=False)["FAT_DIA"]
+        prev_rows.groupby("MES_NUM", dropna=False, as_index=False)["FAT_DIA"]
         .agg(MEDIA_DIA_VENDA="mean", DIAS_COM_VENDA="count")
-        .reset_index()
     )
 else:
     prev_mes = pd.DataFrame(columns=["MES_NUM", "MEDIA_DIA_VENDA", "DIAS_COM_VENDA"])
