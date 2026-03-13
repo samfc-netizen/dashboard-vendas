@@ -1257,6 +1257,10 @@ with col4:
     fig_seg = px.pie(segmento, names="SEGMENTO", values="Faturamento", title="Participação por Segmento (QTD × UNIT)")
     st.plotly_chart(fig_seg, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
+    segmento_tbl = segmento.copy()
+    segmento_tbl["Faturamento (R$)"] = segmento_tbl["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+    st.dataframe(segmento_tbl[["SEGMENTO", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=260)
+
 # ===== MARKUP GERAL (apenas o número) =====
 custo_total_mkp = float(df_f["CUSTO_ST_NUM"].sum()) if ("CUSTO_ST_NUM" in df_f.columns and len(df_f)) else 0.0
 mkp_geral = (fat_total / custo_total_mkp) if custo_total_mkp not in (0, None) else None
