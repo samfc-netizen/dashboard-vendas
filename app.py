@@ -573,6 +573,18 @@ if "TODAS" in lojas_sel:
 else:
     lojas_sel_aplicadas = lojas_sel
 
+vendedores = sorted([x for x in df["VENDEDOR_N"].dropna().astype(str).unique() if x.strip() != ""])
+opcoes_vendedor = ["TODOS"] + vendedores
+vendedores_sel = st.sidebar.multiselect("Vendedor (VENDEDOR)", opcoes_vendedor, default=["TODOS"])
+
+if "TODOS" in vendedores_sel and len(vendedores_sel) > 1:
+    vendedores_sel = [x for x in vendedores_sel if x != "TODOS"]
+
+if "TODOS" in vendedores_sel:
+    vendedores_sel_aplicados = vendedores[:]
+else:
+    vendedores_sel_aplicados = vendedores_sel
+
 datas_validas = df["DATA"].dropna()
 if len(datas_validas) > 0:
     data_min = datas_validas.min().date()
@@ -597,6 +609,11 @@ df_f = df.copy()
 
 if lojas_sel_aplicadas:
     df_f = df_f[df_f["LOJA_N"].isin(lojas_sel_aplicadas)]
+else:
+    df_f = df_f.iloc[0:0]
+
+if vendedores_sel_aplicados:
+    df_f = df_f[df_f["VENDEDOR_N"].isin(vendedores_sel_aplicados)]
 else:
     df_f = df_f.iloc[0:0]
 
@@ -640,6 +657,11 @@ df_2026 = df_2026[df_2026["DATA"].dt.year == ANO_ATUAL].copy()
 
 if lojas_sel_aplicadas:
     df_2026 = df_2026[df_2026["LOJA_N"].isin(lojas_sel_aplicadas)].copy()
+else:
+    df_2026 = df_2026.iloc[0:0].copy()
+
+if vendedores_sel_aplicados:
+    df_2026 = df_2026[df_2026["VENDEDOR_N"].isin(vendedores_sel_aplicados)].copy()
 else:
     df_2026 = df_2026.iloc[0:0].copy()
 
