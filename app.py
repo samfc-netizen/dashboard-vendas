@@ -950,6 +950,9 @@ with st.expander("Abrir Tabela Meta x Realizado"):
 
     st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
 
+with st.expander("Abrir Tabela Previsão de Fechamento"):
+    st.markdown("### Previsão de Fechamento por Loja")
+
     # ------------------------------------------------------------
     # Tabela de Previsão de Fechamento (drill)
     # ------------------------------------------------------------
@@ -1059,27 +1062,19 @@ with st.expander("Abrir Tabela Meta x Realizado"):
         "ATING_META_%",
     ]].copy()
 
-    sty_prev = (
-        prev_view.style
-        .apply(lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
-        .format(
-            {
-                "REALIZADO_R$": lambda v: "R$ " + format_brl(v),
-                "DIAS_VENDA": lambda v: format_decimal_pt(v, 1),
-                "MEDIA_DIA_R$": lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
-                "PREVISAO_R$": lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
-                "ANO_1_R$": lambda v: "R$ " + format_brl(v),
-                "DIF_PREV_X_ANO1_R$": lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
-                "CRESC_%": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
-                "META_R$": lambda v: "R$ " + format_brl(v),
-                "DIF_PREV_X_META_R$": lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
-                "ATING_META_%": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
-            }
-        )
-        .applymap(color_pos_neg, subset=["DIF_PREV_X_ANO1_R$", "CRESC_%", "DIF_PREV_X_META_R$", "ATING_META_%"])
-    )
+    prev_view_fmt = prev_view.copy()
+    prev_view_fmt["REALIZADO_R$"] = prev_view_fmt["REALIZADO_R$"].apply(lambda v: "R$ " + format_brl(v))
+    prev_view_fmt["DIAS_VENDA"] = prev_view_fmt["DIAS_VENDA"].apply(lambda v: format_decimal_pt(v, 1))
+    prev_view_fmt["MEDIA_DIA_R$"] = prev_view_fmt["MEDIA_DIA_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+    prev_view_fmt["PREVISAO_R$"] = prev_view_fmt["PREVISAO_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+    prev_view_fmt["ANO_1_R$"] = prev_view_fmt["ANO_1_R$"].apply(lambda v: "R$ " + format_brl(v))
+    prev_view_fmt["DIF_PREV_X_ANO1_R$"] = prev_view_fmt["DIF_PREV_X_ANO1_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+    prev_view_fmt["CRESC_%"] = prev_view_fmt["CRESC_%"].apply(lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+    prev_view_fmt["META_R$"] = prev_view_fmt["META_R$"].apply(lambda v: "R$ " + format_brl(v))
+    prev_view_fmt["DIF_PREV_X_META_R$"] = prev_view_fmt["DIF_PREV_X_META_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+    prev_view_fmt["ATING_META_%"] = prev_view_fmt["ATING_META_%"].apply(lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
 
-    st.dataframe(sty_prev, use_container_width=True, hide_index=True, height=520)
+    st.dataframe(prev_view_fmt, use_container_width=True, hide_index=True, height=520)
 
 # ------------------------------------------------------------
 # Gráfico 2025 x 2026
