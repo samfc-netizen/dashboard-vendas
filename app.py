@@ -1141,6 +1141,18 @@ else:
         )
         st.plotly_chart(fig_mxl, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
+    st.markdown("#### Ranking de Vendedores")
+    vendedores_mxl = (
+        df_mxl.groupby("VENDEDOR_N", dropna=False)[VAL_COL]
+        .sum()
+        .reset_index()
+        .rename(columns={"VENDEDOR_N": "VENDEDOR", VAL_COL: "Faturamento"})
+        .sort_values("Faturamento", ascending=False)
+    )
+    vendedores_mxl_view = vendedores_mxl.copy()
+    vendedores_mxl_view["Faturamento (R$)"] = vendedores_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+    st.dataframe(vendedores_mxl_view[["VENDEDOR", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=320)
+
     linhas_mxl = (
         df_mxl.groupby("LINHA_N", dropna=False)[VAL_COL]
         .sum()
