@@ -1921,6 +1921,146 @@ def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, dat
 
         st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
 
+    with st.expander("Abrir Tabela Previsão de Fechamento", expanded=False):
+        # Previsão por loja usando a mesma lógica de dias de venda equivalentes do painel
+        real_loja_prev = real_loja.copy()
+
+        ano1_loja = (
+            df_mes.groupby("LOJA_KEY", dropna=False)["VENDAS_2025"]
+            .sum()
+            .reset_index()
+            .rename(columns={"VENDAS_2025": "ANO_1_R$"})
+        )
+
+        prev_base = df_prev.copy()
+        if len(prev_base):
+            diaria_loja_prev = (
+                prev_base.assign(DATA_DIA=prev_base["DATA"].dt.normalize())
+                .groupby(["LOJA_KEY", "DATA_DIA"], as_index=False)
+                .agg(FAT_DIA=("FAT_LINHA", "sum"))
+            )
+            diaria_loja_prev["PESO_DIA"] = diaria_loja_prev["DATA_DIA"].dt.dayofweek.map(lambda x: 0.5 if x == 5 else 1.0)
+            diaria_loja_prev["PESO_DIA"] = diaria_loja_prev["PESO_DIA"].fillna(1.0)
+            diaria_loja_prev = diaria_loja_prev[diaria_loja_prev["FAT_DIA"] > 0].copy()
+
+            dias_loja = (
+                diaria_loja_prev.groupby("LOJA_KEY", dropna=False)["PESO_DIA"]
+                .sum()
+                .reset_index()
+                .rename(columns={"PESO_DIA": "DIAS_VENDA"})
+            )
+        else:
+            dias_loja = pd.DataFrame(columns=["LOJA_KEY", "DIAS_VENDA"])
+
+        prev_tbl = (
+            meta_loja.merge(real_loja_prev, on="LOJA_KEY", how="outer")
+            .merge(ano1_loja, on="LOJA_KEY", how="outer")
+            .merge(dias_loja, on="LOJA_KEY", how="outer")
+            .fillna(0.0)
+        )
+
+        prev_tbl["LOJA"] = prev_tbl["LOJA_KEY"].map(lambda k: str(map_key_to_loja.get(k, k)))
+        prev_tbl["MÉDIA/DIA_R$"] = prev_tbl.apply(
+            lambda r: (r["REALIZADO_R$"] / r["DIAS_VENDA"]) if r["DIAS_VENDA"] not in (0, None) else None,
+            axis=1,
+        )
+        prev_tbl["PREVISÃO_FECHAMENTO_R$"] = prev_tbl.apply(
+            lambda r: (r["MÉDIA/DIA_R$"] * dias_uteis_equiv) if r["MÉDIA/DIA_R$"] is not None and dias_uteis_equiv > 0 else None,
+            axis=1,
+        )
+        prev_tbl["DIF_PREV_X_ANO1_R$"] = prev_tbl["PREVISÃO_FECHAMENTO_R$"] - prev_tbl["ANO_1_R$"]
+        prev_tbl["CRESC_QUEDA_%"] = prev_tbl.apply(
+            lambda r: (r["DIF_PREV_X_ANO1_R$"] / r["ANO_1_R$"] * 100) if r["ANO_1_R$"] not in (0, None) else None,
+            axis=1,
+        )
+        prev_tbl["DIF_PREV_X_META_R$"] = prev_tbl["PREVISÃO_FECHAMENTO_R$"] - prev_tbl["META_R$"]
+        prev_tbl["% ATING. META"] = prev_tbl.apply(
+            lambda r: (r["PREVISÃO_FECHAMENTO_R$"] / r["META_R$"] * 100) if r["META_R$"] not in (0, None) else None,
+            axis=1,
+        )
+
+        prev_tbl["_LOJA_ORD"] = prev_tbl["LOJA_KEY"].map(lambda k: LOJA_KEY_RANK.get(k, DEFAULT_RANK)).astype(int)
+        prev_tbl = prev_tbl.sort_values(["_LOJA_ORD", "LOJA"]).drop(columns=["_LOJA_ORD"])
+
+        total_real_prev = float(prev_tbl["REALIZADO_R$"].sum()) if len(prev_tbl) else 0.0
+        total_ano1_prev = float(prev_tbl["ANO_1_R$"].sum()) if len(prev_tbl) else 0.0
+        total_meta_prev = float(prev_tbl["META_R$"].sum()) if len(prev_tbl) else 0.0
+        total_dias_prev = float(prev_tbl["DIAS_VENDA"].sum()) if len(prev_tbl) else 0.0
+        total_media_prev = (total_real_prev / total_dias_prev) if total_dias_prev != 0 else None
+        total_prev_fech = float(prev_tbl["PREVISÃO_FECHAMENTO_R$"].fillna(0.0).sum()) if len(prev_tbl) else 0.0
+        total_dif_ano1_prev = total_prev_fech - total_ano1_prev
+        total_cresc_prev = (total_dif_ano1_prev / total_ano1_prev * 100) if total_ano1_prev != 0 else None
+        total_dif_meta_prev = total_prev_fech - total_meta_prev
+        total_pct_meta_prev = (total_prev_fech / total_meta_prev * 100) if total_meta_prev != 0 else None
+
+        prev_tbl = pd.concat(
+            [
+                prev_tbl,
+                pd.DataFrame(
+                    [
+                        {
+                            "LOJA_KEY": "",
+                            "LOJA": "TOTAL",
+                            "REALIZADO_R$": total_real_prev,
+                            "DIAS_VENDA": total_dias_prev,
+                            "MÉDIA/DIA_R$": total_media_prev,
+                            "PREVISÃO_FECHAMENTO_R$": total_prev_fech,
+                            "ANO_1_R$": total_ano1_prev,
+                            "DIF_PREV_X_ANO1_R$": total_dif_ano1_prev,
+                            "CRESC_QUEDA_%": total_cresc_prev,
+                            "META_R$": total_meta_prev,
+                            "DIF_PREV_X_META_R$": total_dif_meta_prev,
+                            "% ATING. META": total_pct_meta_prev,
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+
+        prev_view = prev_tbl[
+            [
+                "LOJA",
+                "REALIZADO_R$",
+                "DIAS_VENDA",
+                "MÉDIA/DIA_R$",
+                "PREVISÃO_FECHAMENTO_R$",
+                "ANO_1_R$",
+                "DIF_PREV_X_ANO1_R$",
+                "CRESC_QUEDA_%",
+                "META_R$",
+                "DIF_PREV_X_META_R$",
+                "% ATING. META",
+            ]
+        ].copy()
+
+        prev_sty = (
+            prev_view.style
+            .apply(
+                lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
+                if str(row.get("LOJA", "")).upper() == "TOTAL"
+                else [""] * len(row),
+                axis=1,
+            )
+            .format(
+                {
+                    "REALIZADO_R$": lambda v: "R$ " + format_brl(v),
+                    "DIAS_VENDA": lambda v: format_decimal_pt(v, 1),
+                    "MÉDIA/DIA_R$": lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
+                    "PREVISÃO_FECHAMENTO_R$": lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
+                    "ANO_1_R$": lambda v: "R$ " + format_brl(v),
+                    "DIF_PREV_X_ANO1_R$": lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
+                    "CRESC_QUEDA_%": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
+                    "META_R$": lambda v: "R$ " + format_brl(v),
+                    "DIF_PREV_X_META_R$": lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
+                    "% ATING. META": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
+                }
+            )
+            .applymap(color_pos_neg, subset=["DIF_PREV_X_ANO1_R$", "CRESC_QUEDA_%", "DIF_PREV_X_META_R$", "% ATING. META"])
+        )
+
+        st.dataframe(prev_sty, use_container_width=True, hide_index=True, height=560)
+
 
 # Render no final do dashboard
 _render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim)
