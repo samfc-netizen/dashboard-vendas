@@ -1035,7 +1035,7 @@ with st.expander("Abrir Tabela Previsão de Fechamento"):
         "LOJA_KEY": "",
         "LOJA": "TOTAL",
         "REALIZADO_R$": float(prev_tbl["REALIZADO_R$"].sum()) if len(prev_tbl) else 0.0,
-        "DIAS_VENDA": float(prev_tbl["DIAS_VENDA"].sum()) if len(prev_tbl) else 0.0,
+        "DIAS_VENDA": float(dias_venda_equiv) if dias_venda_equiv is not None else 0.0,
         "ANO_1_R$": float(prev_tbl["ANO_1_R$"].sum()) if len(prev_tbl) else 0.0,
         "META_R$": float(prev_tbl["META_R$"].sum()) if len(prev_tbl) else 0.0,
     }
