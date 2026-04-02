@@ -165,6 +165,15 @@ def color_pos_neg(v):
     return ""
 
 
+def styler_map_compat(styler, func, subset=None):
+    """Compatibilidade entre versões do pandas/Styler.
+    Em versões mais novas, Styler.applymap foi descontinuado/removido em favor de Styler.map.
+    """
+    if hasattr(styler, "map"):
+        return styler.map(func, subset=subset)
+    return styler.applymap(func, subset=subset)
+
+
 def row_total_style(row):
     if str(row.get("LOJA", "")).upper() == "TOTAL":
         return ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
@@ -737,12 +746,20 @@ media_por_dia_venda = (real_total_sel / dias_venda_equiv) if dias_venda_equiv > 
 dias_uteis_equiv = float(sum(float(dias_uteis_map.get(m, 0.0) or 0.0) for m in mes_nums_sel))
 previsao_fechamento = (media_por_dia_venda * dias_uteis_equiv) if media_por_dia_venda is not None and dias_uteis_equiv > 0 else None
 
+clientes_base = df_prev.copy()
+if "CLIENTE_N" in clientes_base.columns:
+    clientes_base = clientes_base[clientes_base["CLIENTE_N"].astype(str).str.strip().ne("")]
+    clientes_base = clientes_base[clientes_base["CLIENTE_N"].astype(str).str.upper().ne("SEM CLIENTE")]
+if VAL_COL in clientes_base.columns:
+    clientes_base = clientes_base[pd.to_numeric(clientes_base[VAL_COL], errors="coerce").fillna(0) > 0]
+clientes_ativos = int(clientes_base["CLIENTE_N"].nunique()) if ("CLIENTE_N" in clientes_base.columns and len(clientes_base)) else 0
+
 pct_meta = (real_total_sel / meta_total_sel * 100) if meta_total_sel != 0 else None
 dif_meta_r = real_total_sel - meta_total_sel
 dif_meta_p = (dif_meta_r / meta_total_sel * 100) if meta_total_sel != 0 else None
 
 st.markdown("#### Realizado e Previsão")
-pc1, pc2, pc3, pc4 = st.columns(4)
+pc1, pc2, pc3, pc4, pc5 = st.columns(5)
 with pc1:
     st.metric("Faturamento Atual (R$)", "R$ " + format_brl(real_total_sel))
 with pc2:
@@ -751,6 +768,8 @@ with pc3:
     st.metric("Média por Dia de Venda", ("R$ " + format_brl(media_por_dia_venda)) if media_por_dia_venda is not None else "—")
 with pc4:
     st.metric("Previsão de Fechamento", ("R$ " + format_brl(previsao_fechamento)) if previsao_fechamento is not None else "—")
+with pc5:
+    st.metric("Clientes Ativos", f"{clientes_ativos:,}".replace(",", "."))
 
 st.caption("Dias de venda consideram apenas datas com faturamento acima de zero. Aos sábados, cada dia conta como 0,5.")
 
@@ -866,7 +885,7 @@ with st.expander("Abrir tabela comparativa Ano-1"):
                 "Acum Dif (R$)": lambda v: "R$ " + format_brl(v),
             }
         )
-        .applymap(color_pos_neg, subset=["Dif (R$)", "Dif (%)", "Acum Dif (R$)"])
+        .pipe(lambda s: styler_map_compat(s, color_pos_neg, subset=["Dif (R$)", "Dif (%)", "Acum Dif (R$)"]))
     )
 
     st.dataframe(styler_tbl, use_container_width=True, hide_index=True, height=560)
@@ -945,7 +964,7 @@ with st.expander("Abrir Tabela Meta x Realizado"):
                 "% ATINGIDO": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
             }
         )
-        .applymap(color_pos_neg, subset=["DIF_R$", "% ATINGIDO"])
+        .pipe(lambda s: styler_map_compat(s, color_pos_neg, subset=["DIF_R$", "% ATINGIDO"]))
     )
 
     st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
@@ -2042,7 +2061,7 @@ def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, dat
                     "INDICADOR DE COMPRAS": _fmt_num,
                 }
             )
-            .applymap(_indicador_style, subset=["INDICADOR DE COMPRAS"])
+            .pipe(lambda s: styler_map_compat(s, _indicador_style, subset=["INDICADOR DE COMPRAS"]))
         )
 
         st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
