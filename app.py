@@ -256,6 +256,28 @@ def carregar_dados():
     else:
         df["DESC_N"] = pd.Series(["SEM DESCRIÇÃO"] * len(df), dtype="string")
 
+    # DESCRIÇÃO CANÔNICA POR CÓDIGO
+    #
+    # A base pode trazer descrições diferentes para o mesmo código de produto.
+    # Para evitar duplicidade e falha de aglutinação nos relatórios, o produto
+    # passa a ser agrupado pelo CÓDIGO, usando apenas uma descrição por código.
+    # Critério: para cada código, utiliza a descrição que mais aparece na base;
+    # em caso de empate, mantém a primeira encontrada na planilha.
+    df["_ORDEM_LINHA"] = range(len(df))
+    desc_por_codigo = (
+        df[df["COD_N"].astype(str).str.upper().ne("SEM COD")]
+        .groupby(["COD_N", "DESC_N"], dropna=False)
+        .agg(QTD_DESC=("DESC_N", "size"), PRIMEIRA_LINHA=("_ORDEM_LINHA", "min"))
+        .reset_index()
+        .sort_values(["COD_N", "QTD_DESC", "PRIMEIRA_LINHA"], ascending=[True, False, True])
+        .drop_duplicates("COD_N")
+        .set_index("COD_N")["DESC_N"]
+        .to_dict()
+    )
+    df["DESC_CANON_N"] = df["COD_N"].map(desc_por_codigo).fillna(df["DESC_N"])
+    df["PRODUTO_KEY"] = df["COD_N"].astype(str)
+    df["_ORDEM_LINHA"] = df["_ORDEM_LINHA"].astype("int64")
+
     # CLIENTE
     col_cliente = pick_first_existing_col(df, ["CLIENTE", "CLIENTE_NOME", "NOMECLIENTE", "RAZAOSOCIAL", "RAZAO SOCIAL"])
     if col_cliente is not None:
@@ -1226,14 +1248,14 @@ st.dataframe(linhas_view[["LINHA", "VALOR (R$)", "QTD"]], use_container_width=Tr
 
 # Produtos da marca (CÓD + Descrição)
 with st.expander("Ver produtos (CÓD + Descrição)"):
-    if ("COD_N" not in df_marca.columns) or ("DESC_N" not in df_marca.columns):
+    if ("COD_N" not in df_marca.columns) or ("DESC_CANON_N" not in df_marca.columns):
         st.info("Colunas de produto (CÓD / Descrição) não foram encontradas no Excel.")
     else:
         prod = (
-            df_marca.groupby(["COD_N", "DESC_N"], dropna=False)
+            df_marca.groupby(["COD_N", "DESC_CANON_N"], dropna=False)
             .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
             .reset_index()
-            .rename(columns={"COD_N": "CÓD", "DESC_N": "DESCRIÇÃO"})
+            .rename(columns={"COD_N": "CÓD", "DESC_CANON_N": "DESCRIÇÃO"})
             .sort_values("VALOR", ascending=False)
         )
         prod_view = prod.copy()
@@ -1325,10 +1347,10 @@ else:
         if linha_sel_mxl is not None:
             df_prod_mxl = df_mxl[df_mxl["LINHA_N"] == linha_sel_mxl].copy()
             prod_mxl = (
-                df_prod_mxl.groupby(["COD_N", "DESC_N"], dropna=False)
+                df_prod_mxl.groupby(["COD_N", "DESC_CANON_N"], dropna=False)
                 .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
                 .reset_index()
-                .rename(columns={"COD_N": "CÓD", "DESC_N": "DESCRIÇÃO"})
+                .rename(columns={"COD_N": "CÓD", "DESC_CANON_N": "DESCRIÇÃO"})
                 .sort_values("VALOR", ascending=False)
             )
             prod_mxl_view = prod_mxl.copy()
