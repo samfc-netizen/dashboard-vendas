@@ -1462,6 +1462,158 @@ with col4:
     segmento_tbl["Faturamento (R$)"] = segmento_tbl["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
     st.dataframe(segmento_tbl[["SEGMENTO", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=260)
 
+    # ------------------------------------------------------------
+    # Drill: Faturamento por Loja x Segmento Gerencial
+    # ------------------------------------------------------------
+    with st.expander("Abrir drill: Faturamento por Loja x Segmento Gerencial"):
+        st.markdown("#### Faturamento por Loja x Segmento Gerencial")
+
+        def classificar_segmento_gerencial(seg):
+            key = canonical_key(seg)
+
+            if key in {"", "SEMSEGMENTO", "NAN", "NONE"}:
+                return "Sem Segmento"
+
+            if "AUTOMOT" in key:
+                return "Automotivo"
+
+            if "THINNER" in key or "TINER" in key:
+                return "Thinner"
+
+            if (
+                "IMOBILI" in key
+                or "DECOR" in key
+                or "INDUSTR" in key
+                or "MOVELEIR" in key
+                or "MOVEL" in key
+            ):
+                return "Decor/Industrial"
+
+            return "Outros Segmentos"
+
+        df_seg_loja = df_f.copy()
+        df_seg_loja["SEGMENTO_GERENCIAL"] = df_seg_loja["SEGMENTO_N"].apply(classificar_segmento_gerencial)
+
+        ordem_segmentos = ["Automotivo", "Decor/Industrial", "Thinner", "Sem Segmento", "Outros Segmentos"]
+
+        seg_loja = (
+            df_seg_loja.groupby(["LOJA_N", "SEGMENTO_GERENCIAL"], dropna=False)["FAT_LINHA"]
+            .sum()
+            .reset_index()
+            .rename(columns={"LOJA_N": "LOJA", "SEGMENTO_GERENCIAL": "Segmento", "FAT_LINHA": "Faturamento"})
+        )
+
+        lojas_drill = sorted(
+            [x for x in df_seg_loja["LOJA_N"].dropna().astype(str).unique() if x.strip() != ""],
+            key=lambda x: (LOJA_KEY_RANK.get(canonical_key(x), DEFAULT_RANK), str(x)),
+        )
+
+        idx_completo = pd.MultiIndex.from_product(
+            [lojas_drill, ordem_segmentos],
+            names=["LOJA", "Segmento"],
+        )
+
+        seg_loja = (
+            seg_loja.set_index(["LOJA", "Segmento"])
+            .reindex(idx_completo, fill_value=0)
+            .reset_index()
+        )
+
+        # Remove colunas/categorias opcionais quando não houver faturamento no recorte.
+        segmentos_com_valor = seg_loja.groupby("Segmento")["Faturamento"].sum()
+        segmentos_visiveis = [s for s in ordem_segmentos if float(segmentos_com_valor.get(s, 0.0) or 0.0) > 0]
+        if not segmentos_visiveis:
+            segmentos_visiveis = ["Automotivo", "Decor/Industrial", "Thinner"]
+
+        seg_loja = seg_loja[seg_loja["Segmento"].isin(segmentos_visiveis)].copy()
+
+        total_loja = (
+            seg_loja.groupby("LOJA", dropna=False)["Faturamento"]
+            .sum()
+            .reset_index(name="Total Loja")
+        )
+        seg_loja = seg_loja.merge(total_loja, on="LOJA", how="left")
+        seg_loja["% da Loja"] = seg_loja.apply(
+            lambda r: (r["Faturamento"] / r["Total Loja"] * 100) if r["Total Loja"] not in (0, None) else 0.0,
+            axis=1,
+        )
+        seg_loja["Label"] = seg_loja.apply(
+            lambda r: ("R$ " + format_brl(r["Faturamento"]) + "<br>" + f"{r['% da Loja']:.1f}%".replace(".", ","))
+            if r["Faturamento"] > 0 else "",
+            axis=1,
+        )
+
+        fig_seg_loja = px.bar(
+            seg_loja,
+            x="LOJA",
+            y="Faturamento",
+            color="Segmento",
+            barmode="group",
+            text="Label",
+            category_orders={"LOJA": lojas_drill, "Segmento": segmentos_visiveis},
+            title="Faturamento por Loja: Automotivo x Decor/Industrial x Thinner",
+            hover_data={"Faturamento": ":,.2f", "% da Loja": ":.2f", "Total Loja": ":,.2f", "Label": False},
+        )
+        fig_seg_loja.update_traces(textposition="outside", cliponaxis=False)
+        fig_seg_loja.update_layout(
+            xaxis_tickangle=-30,
+            yaxis_title="Faturamento (R$)",
+            xaxis_title="Loja",
+            legend_title="Segmento Gerencial",
+            height=520,
+        )
+        st.plotly_chart(fig_seg_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+        st.markdown("##### Tabela detalhada")
+        tabela_seg = seg_loja.pivot_table(
+            index="LOJA",
+            columns="Segmento",
+            values="Faturamento",
+            aggfunc="sum",
+            fill_value=0,
+        ).reset_index()
+
+        pct_seg = seg_loja.pivot_table(
+            index="LOJA",
+            columns="Segmento",
+            values="% da Loja",
+            aggfunc="sum",
+            fill_value=0,
+        ).reset_index()
+
+        tabela_final = pd.DataFrame({"LOJA": lojas_drill})
+        for seg in segmentos_visiveis:
+            valor_map = tabela_seg.set_index("LOJA")[seg].to_dict() if seg in tabela_seg.columns else {}
+            pct_map = pct_seg.set_index("LOJA")[seg].to_dict() if seg in pct_seg.columns else {}
+            tabela_final[f"{seg} (R$)"] = tabela_final["LOJA"].map(lambda l: float(valor_map.get(l, 0.0) or 0.0))
+            tabela_final[f"{seg} (%)"] = tabela_final["LOJA"].map(lambda l: float(pct_map.get(l, 0.0) or 0.0))
+
+        tabela_final["Total Loja (R$)"] = tabela_final[[f"{s} (R$)" for s in segmentos_visiveis]].sum(axis=1)
+
+        total_row = {"LOJA": "TOTAL"}
+        total_geral_seg = float(tabela_final["Total Loja (R$)"].sum()) if len(tabela_final) else 0.0
+        for seg in segmentos_visiveis:
+            total_seg = float(tabela_final[f"{seg} (R$)"].sum()) if len(tabela_final) else 0.0
+            total_row[f"{seg} (R$)"] = total_seg
+            total_row[f"{seg} (%)"] = (total_seg / total_geral_seg * 100) if total_geral_seg != 0 else 0.0
+        total_row["Total Loja (R$)"] = total_geral_seg
+
+        tabela_final = pd.concat([tabela_final, pd.DataFrame([total_row])], ignore_index=True)
+
+        format_cols = {}
+        for seg in segmentos_visiveis:
+            format_cols[f"{seg} (R$)"] = lambda v: "R$ " + format_brl(v)
+            format_cols[f"{seg} (%)"] = lambda v: f"{float(v):.2f}%".replace(".", ",")
+        format_cols["Total Loja (R$)"] = lambda v: "R$ " + format_brl(v)
+
+        sty_seg = (
+            tabela_final.style
+            .apply(lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
+            .format(format_cols)
+        )
+
+        st.dataframe(sty_seg, use_container_width=True, hide_index=True, height=520)
+
 # ===== MARKUP GERAL (apenas o número) =====
 custo_total_mkp = float(df_f["CUSTO_ST_NUM"].sum()) if ("CUSTO_ST_NUM" in df_f.columns and len(df_f)) else 0.0
 mkp_geral = (fat_total / custo_total_mkp) if custo_total_mkp not in (0, None) else None
