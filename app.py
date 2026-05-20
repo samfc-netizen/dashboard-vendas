@@ -1726,6 +1726,7 @@ else:
         pct_linha_no_total = (total_linha / (fat_total if fat_total != 0 else 1.0)) * 100
         st.metric("% da LINHA sobre Total", f"{pct_linha_no_total:.2f}%".replace(".", ","))
 
+    # Mantém a visão agregada por MARCA para o gráfico lateral
     marcas_linha = (
         df_linha.groupby("MARCA_N", dropna=False)["FAT_LINHA"]
         .sum()
@@ -1739,15 +1740,34 @@ else:
 
     marcas_linha["% da LINHA"] = (marcas_linha["Faturamento"] / denom_linha) * 100
     marcas_linha["% do Total"] = (marcas_linha["Faturamento"] / denom_total) * 100
-    marcas_linha["Faturamento (R$)"] = marcas_linha["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-    marcas_linha["% da LINHA"] = marcas_linha["% da LINHA"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-    marcas_linha["% do Total"] = marcas_linha["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+
+    # Nova visão detalhada: LINHA → MARCA → CÓDIGO/DESCRIÇÃO DO PRODUTO
+    produtos_linha = (
+        df_linha.groupby(["MARCA_N", "COD_N", "DESC_CANON_N"], dropna=False)
+        .agg(Faturamento=("FAT_LINHA", "sum"), QTD=("QTD_NUM", "sum"))
+        .reset_index()
+        .sort_values("Faturamento", ascending=False)
+        .rename(
+            columns={
+                "MARCA_N": "MARCA",
+                "COD_N": "CÓDIGO",
+                "DESC_CANON_N": "DESCRIÇÃO",
+            }
+        )
+    )
+
+    produtos_linha["% da LINHA"] = (produtos_linha["Faturamento"] / denom_linha) * 100
+    produtos_linha["% do Total"] = (produtos_linha["Faturamento"] / denom_total) * 100
+    produtos_linha["Faturamento (R$)"] = produtos_linha["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+    produtos_linha["QTD"] = produtos_linha["QTD"].apply(lambda v: format_brl(v))
+    produtos_linha["% da LINHA"] = produtos_linha["% da LINHA"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+    produtos_linha["% do Total"] = produtos_linha["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
 
     cX, cY = st.columns([1.2, 1.0], gap="large")
     with cX:
-        st.markdown(f"**Marcas dentro da LINHA: {st.session_state['linha_sel']}**")
+        st.markdown(f"**Produtos dentro da LINHA: {st.session_state['linha_sel']}**")
         st.dataframe(
-            marcas_linha[["MARCA", "Faturamento (R$)", "% da LINHA", "% do Total"]],
+            produtos_linha[["MARCA", "CÓDIGO", "DESCRIÇÃO", "Faturamento (R$)", "QTD", "% da LINHA", "% do Total"]],
             use_container_width=True,
             hide_index=True,
             height=520,
