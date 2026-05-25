@@ -5,13 +5,55 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date
+import io
+import zipfile
+from pathlib import Path
 
 st.set_page_config(page_title="Dashboard de Vendas", layout="wide")
 st.title("Dashboard de Vendas Dauto Tintas")
 
 top_card = st.empty()
 
-ARQUIVO_EXCEL = "BASE .xlsx"
+ARQUIVO_ZIP = "BASE.zip"
+
+
+@st.cache_data(ttl=10)
+def carregar_excel_base_bytes() -> bytes:
+    """Carrega em memória o primeiro arquivo .xlsx encontrado dentro de BASE.zip."""
+    caminho_zip = Path(ARQUIVO_ZIP)
+
+    if not caminho_zip.exists():
+        st.error(
+            f"Arquivo {ARQUIVO_ZIP} não encontrado. "
+            "Coloque o BASE.zip na mesma pasta deste app.py no GitHub/Streamlit."
+        )
+        st.stop()
+
+    with zipfile.ZipFile(caminho_zip, "r") as z:
+        arquivos_excel = [
+            nome for nome in z.namelist()
+            if nome.lower().endswith(".xlsx") and not Path(nome).name.startswith("~$")
+        ]
+
+        if not arquivos_excel:
+            st.error(
+                f"Nenhum arquivo .xlsx foi encontrado dentro de {ARQUIVO_ZIP}. "
+                "Compacte a planilha Excel dentro do ZIP e tente novamente."
+            )
+            st.stop()
+
+        nome_excel = arquivos_excel[0]
+        with z.open(nome_excel) as f:
+            return f.read()
+
+
+def ler_excel_base(sheet_name=0) -> pd.DataFrame:
+    """Lê uma aba da planilha Excel compactada dentro do BASE.zip."""
+    return pd.read_excel(
+        io.BytesIO(carregar_excel_base_bytes()),
+        sheet_name=sheet_name,
+        engine="openpyxl",
+    )
 
 
 # ========= Helpers =========
@@ -208,7 +250,7 @@ PLOT_CONFIG_INTERACTIVE_NO_ZOOM = {
 # ========= Cache de dados =========
 @st.cache_data(ttl=10)
 def carregar_dados():
-    df = pd.read_excel(ARQUIVO_EXCEL, sheet_name=0)
+    df = ler_excel_base(sheet_name=0)
     df.columns = df.columns.astype(str).str.strip()
 
     # força object -> string (ajuda em filtros)
@@ -349,7 +391,7 @@ def carregar_movimentacoes_compras():
     def _try_read_sheet(candidates: list[str]) -> pd.DataFrame:
         for sh in candidates:
             try:
-                dfx = pd.read_excel(ARQUIVO_EXCEL, sheet_name=sh)
+                dfx = ler_excel_base(sheet_name=sh)
                 dfx.columns = dfx.columns.astype(str).str.strip()
                 # força object -> string (ajuda em filtros)
                 obj_cols = dfx.select_dtypes(include=["object"]).columns
@@ -416,7 +458,7 @@ def carregar_referencias_planejamento():
     def _read_first(candidates: list[str]) -> pd.DataFrame:
         for sh in candidates:
             try:
-                dfx = pd.read_excel(ARQUIVO_EXCEL, sheet_name=sh)
+                dfx = ler_excel_base(sheet_name=sh)
                 dfx.columns = dfx.columns.astype(str).str.strip()
                 return dfx
             except Exception:
