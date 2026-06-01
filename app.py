@@ -15,45 +15,98 @@ st.title("Dashboard de Vendas Dauto Tintas")
 top_card = st.empty()
 
 ARQUIVO_ZIP = "BASE.zip"
+ARQUIVOS_BASE_SEPARADOS = ["BASE 1.xlsx", "BASE 2.xlsx", "BASE 3.xlsx"]
+ARQUIVO_METAS = "METAS.xlsx"
+ARQUIVO_COMPRAS = "COMPRAS.xlsx"
+
+
+def _nome_arquivo_key(nome: str) -> str:
+    """Normaliza nome de arquivo para localizar variações com espaços/acentos."""
+    return re.sub(r"[^A-Z0-9]", "", unicodedata.normalize("NFKD", str(nome).upper()).encode("ASCII", "ignore").decode("ASCII"))
+
+
+def resolver_arquivo_excel(candidatos: list[str]) -> Path | None:
+    """Procura arquivo .xlsx na pasta do app aceitando variações de espaço no nome."""
+    pasta = Path(".")
+
+    for nome in candidatos:
+        caminho = pasta / nome
+        if caminho.exists():
+            return caminho
+
+    arquivos_xlsx = [p for p in pasta.glob("*.xlsx") if not p.name.startswith("~$")]
+    mapa = {_nome_arquivo_key(p.name): p for p in arquivos_xlsx}
+    for nome in candidatos:
+        chave = _nome_arquivo_key(nome)
+        if chave in mapa:
+            return mapa[chave]
+
+    return None
 
 
 @st.cache_data(ttl=10)
-def carregar_excel_base_bytes() -> bytes:
-    """Carrega em memória o primeiro arquivo .xlsx encontrado dentro de BASE.zip."""
+def carregar_base_consolidada() -> pd.DataFrame:
+    """Carrega a base de vendas.
+
+    Prioridade:
+    1) BASE 1.xlsx + BASE 2.xlsx + BASE 3.xlsx na pasta do app.
+    2) BASE.xlsx direto na pasta do app.
+    3) Primeiro .xlsx encontrado dentro de BASE.zip, mantendo compatibilidade com a versão antiga.
+    """
+    dfs = []
+    arquivos_encontrados = []
+
+    for nome in ARQUIVOS_BASE_SEPARADOS:
+        caminho = resolver_arquivo_excel([nome])
+        if caminho is not None:
+            dfx = pd.read_excel(caminho, sheet_name=0, engine="openpyxl")
+            dfx["_ARQUIVO_BASE"] = caminho.name
+            dfs.append(dfx)
+            arquivos_encontrados.append(caminho.name)
+
+    if dfs:
+        return pd.concat(dfs, ignore_index=True)
+
+    caminho_base_unica = resolver_arquivo_excel(["BASE.xlsx"])
+    if caminho_base_unica is not None:
+        df_unica = pd.read_excel(caminho_base_unica, sheet_name=0, engine="openpyxl")
+        df_unica["_ARQUIVO_BASE"] = caminho_base_unica.name
+        return df_unica
+
     caminho_zip = Path(ARQUIVO_ZIP)
+    if caminho_zip.exists():
+        with zipfile.ZipFile(caminho_zip, "r") as z:
+            arquivos_excel = [
+                nome for nome in z.namelist()
+                if nome.lower().endswith(".xlsx") and not Path(nome).name.startswith("~$")
+            ]
+            if arquivos_excel:
+                nome_excel = arquivos_excel[0]
+                with z.open(nome_excel) as f:
+                    df_zip = pd.read_excel(io.BytesIO(f.read()), sheet_name=0, engine="openpyxl")
+                    df_zip["_ARQUIVO_BASE"] = f"{ARQUIVO_ZIP}/{Path(nome_excel).name}"
+                    return df_zip
 
-    if not caminho_zip.exists():
-        st.error(
-            f"Arquivo {ARQUIVO_ZIP} não encontrado. "
-            "Coloque o BASE.zip na mesma pasta deste app.py no GitHub/Streamlit."
-        )
-        st.stop()
-
-    with zipfile.ZipFile(caminho_zip, "r") as z:
-        arquivos_excel = [
-            nome for nome in z.namelist()
-            if nome.lower().endswith(".xlsx") and not Path(nome).name.startswith("~$")
-        ]
-
-        if not arquivos_excel:
-            st.error(
-                f"Nenhum arquivo .xlsx foi encontrado dentro de {ARQUIVO_ZIP}. "
-                "Compacte a planilha Excel dentro do ZIP e tente novamente."
-            )
-            st.stop()
-
-        nome_excel = arquivos_excel[0]
-        with z.open(nome_excel) as f:
-            return f.read()
+    st.error(
+        "Nenhuma base de vendas foi encontrada. Coloque na pasta do app os arquivos "
+        "BASE 1.xlsx, BASE 2.xlsx e BASE 3.xlsx. Também aceito BASE.xlsx ou BASE.zip como fallback."
+    )
+    st.stop()
 
 
 def ler_excel_base(sheet_name=0) -> pd.DataFrame:
-    """Lê uma aba da planilha Excel compactada dentro do BASE.zip."""
-    return pd.read_excel(
-        io.BytesIO(carregar_excel_base_bytes()),
-        sheet_name=sheet_name,
-        engine="openpyxl",
-    )
+    """Compatibilidade: retorna a base consolidada de vendas."""
+    if sheet_name not in (0, "0", None):
+        raise ValueError("A base de vendas separada é lida sempre pela primeira aba de cada arquivo BASE.")
+    return carregar_base_consolidada()
+
+
+def ler_excel_arquivo(nome_arquivo: str, sheet_name=0) -> pd.DataFrame:
+    """Lê uma planilha auxiliar específica na pasta do app."""
+    caminho = resolver_arquivo_excel([nome_arquivo])
+    if caminho is None:
+        raise FileNotFoundError(f"Arquivo {nome_arquivo} não encontrado na pasta do app.")
+    return pd.read_excel(caminho, sheet_name=sheet_name, engine="openpyxl")
 
 
 # ========= Helpers =========
@@ -389,11 +442,23 @@ def carregar_movimentacoes_compras():
     """
 
     def _try_read_sheet(candidates: list[str]) -> pd.DataFrame:
+        # Agora compras/devoluções ficam no arquivo COMPRAS.xlsx.
+        # Mantém fallback para a base antiga, caso alguém ainda esteja usando BASE.zip/BASE.xlsx com abas internas.
+        for sh in candidates:
+            try:
+                dfx = ler_excel_arquivo(ARQUIVO_COMPRAS, sheet_name=sh)
+                dfx.columns = dfx.columns.astype(str).str.strip()
+                obj_cols = dfx.select_dtypes(include=["object"]).columns
+                if len(obj_cols) > 0:
+                    dfx[obj_cols] = dfx[obj_cols].astype("string")
+                return dfx
+            except Exception:
+                continue
+
         for sh in candidates:
             try:
                 dfx = ler_excel_base(sheet_name=sh)
                 dfx.columns = dfx.columns.astype(str).str.strip()
-                # força object -> string (ajuda em filtros)
                 obj_cols = dfx.select_dtypes(include=["object"]).columns
                 if len(obj_cols) > 0:
                     dfx[obj_cols] = dfx[obj_cols].astype("string")
@@ -456,6 +521,16 @@ def carregar_movimentacoes_compras():
 @st.cache_data(ttl=10)
 def carregar_referencias_planejamento():
     def _read_first(candidates: list[str]) -> pd.DataFrame:
+        # Agora Dias úteis, Meta Dauto Tintas e Ano-1 ficam no arquivo METAS.xlsx.
+        # Mantém fallback para a base antiga com abas internas.
+        for sh in candidates:
+            try:
+                dfx = ler_excel_arquivo(ARQUIVO_METAS, sheet_name=sh)
+                dfx.columns = dfx.columns.astype(str).str.strip()
+                return dfx
+            except Exception:
+                continue
+
         for sh in candidates:
             try:
                 dfx = ler_excel_base(sheet_name=sh)
@@ -722,7 +797,14 @@ st.markdown(f"**Meses selecionados:** {mes_sel_label}")
 st.subheader("Comparativo: 2025 (Ano-1) x 2026 (Ano Atual)")
 
 lojas_keys_aplicadas = [canonical_key(x) for x in lojas_sel_aplicadas if canonical_key(x)]
-df_2025 = montar_df_2025_fixo(lojas_keys_aplicadas)
+df_meta_ref, df_ano1_ref, dias_uteis_map = carregar_referencias_planejamento()
+
+# Ano-1 agora vem preferencialmente da planilha METAS.xlsx, aba ANO-1.
+# Se a planilha auxiliar não existir ou estiver vazia, mantém os valores fixos antigos como fallback.
+if df_ano1_ref is not None and not df_ano1_ref.empty:
+    df_2025 = df_ano1_ref[df_ano1_ref["LOJA_KEY"].isin(lojas_keys_aplicadas)].copy()
+else:
+    df_2025 = montar_df_2025_fixo(lojas_keys_aplicadas)
 
 df_2026 = df.copy()
 df_2026 = df_2026[df_2026["DATA"].notna()].copy()
@@ -780,14 +862,19 @@ k4.metric("Variação (%)", (f"{var_pct_total:.2f}%".replace(".", ",")) if var_p
 # ============================================================
 st.markdown("### Meta × Realizado")
 
-df_meta = montar_df_metas_fixas(lojas_keys_aplicadas)
+# Meta agora vem preferencialmente da planilha METAS.xlsx, aba META DAUTO TINTAS.
+# Se a planilha auxiliar não existir ou estiver vazia, mantém os valores fixos antigos como fallback.
+if df_meta_ref is not None and not df_meta_ref.empty:
+    df_meta = df_meta_ref[df_meta_ref["LOJA_KEY"].isin(lojas_keys_aplicadas)].copy()
+else:
+    df_meta = montar_df_metas_fixas(lojas_keys_aplicadas)
+
 df_meta_sel = df_meta[df_meta["MES_NUM"].isin(mes_nums_sel)].copy()
 
 meta_total_sel = float(df_meta_sel["META"].sum()) if len(df_meta_sel) else 0.0
 real_total_sel = float(df_mes["VENDAS_2026"].sum()) if len(df_mes) else 0.0
 
 # ===== Previsão de fechamento (média do realizado / dias de venda equivalentes)
-_df_meta_ref, _df_ano1_ref, dias_uteis_map = carregar_referencias_planejamento()
 df_prev = df_f.copy()
 df_prev = df_prev[df_prev["DATA"].notna()].copy()
 df_prev = df_prev[df_prev["DATA"].dt.month.isin(mes_nums_sel)].copy()
