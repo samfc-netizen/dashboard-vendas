@@ -5,6 +5,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date
+from urllib.parse import quote
 import io
 import zipfile
 from pathlib import Path
@@ -694,6 +695,338 @@ def montar_df_metas_fixas(lojas_keys):
     return pd.DataFrame(rows)
 
 
+
+
+# ============================================================
+# Relatórios WhatsApp (Página Relatórios)
+# ============================================================
+TELEFONES_WHATSAPP_LOJAS = {
+    "ADE": "556191604836",
+    "GAMA": "556193767169",
+    "LUZIANIA": "556195356524",
+    "SOFNORTE": "556192568295",
+    "CEILANDIA": "556199783739",
+    "SIA": "556199783735",
+    "UNAI": "553899292791",
+    "AGLINDAS": "556191159390",
+    "GUARA": "556182729009",
+}
+TELEFONE_WHATSAPP_GERAL_MENSAL = "556199783726"
+TELEFONE_WHATSAPP_GERAL_DIARIO = "5561993215052"
+
+
+def _money(v) -> str:
+    return "R$ " + format_brl(float(v or 0))
+
+
+def _pct(v) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    return f"{float(v):.2f}%".replace(".", ",")
+
+
+def _loja_ord_key(loja_key: str) -> tuple[int, str]:
+    return (LOJA_KEY_RANK.get(str(loja_key), DEFAULT_RANK), str(loja_key))
+
+
+def _periodo_texto(data_ini_rel, data_fim_rel) -> str:
+    if data_ini_rel == data_fim_rel:
+        return data_ini_rel.strftime("%d/%m/%Y")
+    return f"{data_ini_rel.strftime('%d/%m/%Y')} a {data_fim_rel.strftime('%d/%m/%Y')}"
+
+
+def _grupo_linha(nome) -> str:
+    k = canonical_key(nome)
+    if "THINNER" in k or "TINNER" in k:
+        return "Thinner"
+    if "AUTOMOT" in k:
+        return "Automotivo"
+    return "Decor/Industrial"
+
+
+def _rank_text(df_base: pd.DataFrame, col: str, titulo: str, valor_col: str = "FAT_LINHA", top: int = 10) -> str:
+    if df_base.empty or col not in df_base.columns:
+        return f"*{titulo}*\nSem dados."
+    total = float(df_base[valor_col].sum()) if valor_col in df_base.columns else 0.0
+    tab = (
+        df_base.groupby(col, dropna=False)[valor_col]
+        .sum()
+        .sort_values(ascending=False)
+        .head(top)
+    )
+    linhas = [f"*{titulo}*"]
+    for i, (nome, valor) in enumerate(tab.items(), start=1):
+        perc = (float(valor) / total * 100) if total else 0.0
+        linhas.append(f"{i}. {nome}: {_money(valor)} ({_pct(perc)})")
+    return "\n".join(linhas)
+
+
+def _linhas_texto(df_base: pd.DataFrame) -> str:
+    if df_base.empty:
+        return "*Segmentos*\nSem dados."
+    aux = df_base.copy()
+    aux["GRUPO_REL"] = aux["SEGMENTO_N"].apply(_grupo_linha)
+    total = float(aux["FAT_LINHA"].sum())
+    tab = aux.groupby("GRUPO_REL", dropna=False)["FAT_LINHA"].sum().reindex(["Automotivo", "Thinner", "Decor/Industrial"]).fillna(0.0)
+    linhas = ["*Segmentos*" if total else "*Segmentos*"]
+    for nome, valor in tab.items():
+        perc = (float(valor) / total * 100) if total else 0.0
+        linhas.append(f"- {nome}: {_money(valor)} ({_pct(perc)})")
+    return "\n".join(linhas)
+
+
+def _linhas_dataframe(df_base: pd.DataFrame) -> pd.DataFrame:
+    aux = df_base.copy()
+    if aux.empty:
+        return pd.DataFrame(columns=["Linha", "Faturamento", "Participação"])
+    aux["GRUPO_REL"] = aux["SEGMENTO_N"].apply(_grupo_linha)
+    total = float(aux["FAT_LINHA"].sum())
+    tab = aux.groupby("GRUPO_REL", dropna=False)["FAT_LINHA"].sum().reindex(["Automotivo", "Thinner", "Decor/Industrial"]).fillna(0.0).reset_index()
+    tab.columns = ["Linha", "Faturamento"]
+    tab["Participação"] = tab["Faturamento"].apply(lambda v: _pct((float(v) / total * 100) if total else 0.0))
+    tab["Faturamento"] = tab["Faturamento"].apply(_money)
+    return tab
+
+
+def _dias_equivalentes_vendidos(df_base: pd.DataFrame) -> float:
+    if df_base.empty or "DATA" not in df_base.columns:
+        return 0.0
+    dias = df_base[df_base["DATA"].notna()].copy()
+    if dias.empty:
+        return 0.0
+    datas = dias["DATA"].dt.normalize().drop_duplicates()
+    return float(sum(0.5 if d.dayofweek == 5 else 1.0 for d in datas))
+
+
+def _referencias_mes(lojas_keys: list[str], mes: int):
+    df_meta_ref, df_ano1_ref, dias_uteis_map = carregar_referencias_planejamento()
+    if df_meta_ref is not None and not df_meta_ref.empty:
+        metas = df_meta_ref[(df_meta_ref["MES_NUM"] == mes) & (df_meta_ref["LOJA_KEY"].isin(lojas_keys))].copy()
+    else:
+        metas = montar_df_metas_fixas(lojas_keys)
+        metas = metas[metas["MES_NUM"] == mes].copy()
+    if df_ano1_ref is not None and not df_ano1_ref.empty:
+        ano1 = df_ano1_ref[(df_ano1_ref["MES_NUM"] == mes) & (df_ano1_ref["LOJA_KEY"].isin(lojas_keys))].copy()
+    else:
+        ano1 = montar_df_2025_fixo(lojas_keys)
+        ano1 = ano1[ano1["MES_NUM"] == mes].copy()
+    dias_uteis = float(dias_uteis_map.get(mes, 0.0) or 0.0)
+    if dias_uteis <= 0:
+        # fallback simples: considera dias de segunda a sexta = 1 e sábado = 0,5 dentro do mês
+        import calendar
+        ano = ANO_ATUAL
+        ultimo = calendar.monthrange(ano, mes)[1]
+        dias_uteis = sum(0.5 if pd.Timestamp(ano, mes, d).dayofweek == 5 else 1.0 for d in range(1, ultimo + 1) if pd.Timestamp(ano, mes, d).dayofweek <= 5)
+    return metas, ano1, dias_uteis
+
+
+def _criar_link_whatsapp(numero: str, texto: str) -> str:
+    return f"https://wa.me/{numero}?text={quote(texto)}"
+
+
+def _botao_whatsapp(label: str, numero: str, texto: str):
+    st.link_button(label, _criar_link_whatsapp(numero, texto))
+
+
+def _montar_relatorio_diario_loja(df_loja: pd.DataFrame, loja_nome: str, data_rel, valor_col: str) -> str:
+    total = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
+    partes = [
+        f"*{loja_nome} | Relatório diário*",
+        f"Data: {data_rel.strftime('%d/%m/%Y')}",
+        "",
+        f"A loja vendeu *{_money(total)}* hoje.",
+        "",
+        _linhas_texto(df_loja),
+        "",
+        _rank_text(df_loja, "MARCA_N", "Top 10 marcas do dia", "FAT_LINHA"),
+        "",
+        _rank_text(df_loja, "CLIENTE_N", "Top 10 clientes do dia", valor_col),
+    ]
+    return "\n".join(partes)
+
+
+def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_ini_rel, data_fim_rel, mes: int, meta: float, ano1: float, dias_uteis_mes: float, valor_col: str) -> str:
+    realizado = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
+    dias_venda = _dias_equivalentes_vendidos(df_loja)
+    media_dia = (realizado / dias_venda) if dias_venda else 0.0
+    previsao = media_dia * dias_uteis_mes if dias_uteis_mes else realizado
+    dif_ano1 = previsao - float(ano1 or 0)
+    cresc = (dif_ano1 / float(ano1) * 100) if ano1 else None
+    dif_meta = previsao - float(meta or 0)
+    ating = (previsao / float(meta) * 100) if meta else None
+    emoji_ano1 = "🟢" if dif_ano1 >= 0 else "🔴"
+    emoji_meta = "🟢" if dif_meta >= 0 else "🔴"
+    partes = [
+        f"*{loja_nome} | Análise parcial de {MESES[mes-1][1].title()}*",
+        f"Período: {_periodo_texto(data_ini_rel, data_fim_rel)}.",
+        "",
+        f"A loja está com *{_money(realizado)}* faturados até agora. Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao)}*.",
+        "",
+        f"{emoji_ano1} Contra o Ano-1, a previsão fica *{_money(abs(dif_ano1))} {'acima' if dif_ano1 >= 0 else 'abaixo'}*, variação de *{_pct(cresc)}*.",
+        f"{emoji_meta} Contra a meta, a previsão fica *{_money(abs(dif_meta))} {'acima' if dif_meta >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating)}*.",
+        "",
+        _linhas_texto(df_loja).replace("*Segmentos*", "*Linhas*"),
+        "",
+        _rank_text(df_loja, "MARCA_N", "Top 10 marcas da loja", "FAT_LINHA"),
+        "",
+        _rank_text(df_loja, "CLIENTE_N", "Top 10 clientes da loja", valor_col),
+        "",
+        "Resumo: " + ("a loja está projetando fechamento acima da meta. O foco agora é sustentar o ritmo e proteger as linhas de maior peso." if dif_meta >= 0 else "a loja precisa acelerar para reduzir a distância da meta até o fechamento do mês."),
+    ]
+    return "\n".join(partes)
+
+
+def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
+    st.title("Relatórios")
+    st.caption("Relatórios em texto pronto para WhatsApp, com link direto para o número cadastrado por loja.")
+
+    datas_validas_rel = df_base["DATA"].dropna()
+    if datas_validas_rel.empty:
+        st.warning("A base não possui datas válidas para gerar relatórios.")
+        return
+
+    lojas_map = df_base[["LOJA_KEY", "LOJA_N"]].drop_duplicates().groupby("LOJA_KEY")["LOJA_N"].first().to_dict()
+    lojas_keys = sorted([k for k in lojas_map.keys() if k], key=_loja_ord_key)
+
+    modo = st.radio("Tipo de relatório", ["Diário", "Parcial do mês / WhatsApp por loja"], horizontal=True)
+
+    if modo == "Diário":
+        data_padrao = datas_validas_rel.max().date()
+        data_rel = st.date_input("Data do relatório diário", value=data_padrao, min_value=datas_validas_rel.min().date(), max_value=datas_validas_rel.max().date())
+        df_rel = df_base[df_base["DATA"].notna() & (df_base["DATA"].dt.date == data_rel)].copy()
+        total = float(df_rel["FAT_LINHA"].sum()) if len(df_rel) else 0.0
+        st.metric("Faturamento do dia", _money(total))
+        st.dataframe(_linhas_dataframe(df_rel), use_container_width=True, hide_index=True)
+
+        blocos = []
+        venda_loja = df_rel.groupby("LOJA_KEY")["FAT_LINHA"].sum().reindex(lojas_keys).fillna(0.0)
+        texto_geral = [
+            f"📊 *Relatório diário - {data_rel.strftime('%d/%m/%Y')}*",
+            "",
+            f"Hoje o faturamento total foi de *{_money(total)}*.",
+            "",
+            "*Venda por loja*",
+        ]
+        for k in lojas_keys:
+            texto_geral.append(f"- *{lojas_map.get(k, k)}*: {_money(venda_loja.get(k, 0.0))}")
+        texto_geral += ["", _linhas_texto(df_rel), "", _rank_text(df_rel, "MARCA_N", "Top 10 marcas do dia", "FAT_LINHA"), "", "Os blocos por loja trazem o detalhe de segmentos, marcas e clientes do dia.", "", "==============================", "RELATÓRIOS POR LOJA", "=============================="]
+        for k in lojas_keys:
+            df_loja = df_rel[df_rel["LOJA_KEY"] == k].copy()
+            loja_nome = str(lojas_map.get(k, k))
+            bloco = _montar_relatorio_diario_loja(df_loja, loja_nome, data_rel, valor_col)
+            blocos.append((k, loja_nome, bloco))
+            texto_geral += ["", "------------------------------", bloco]
+        texto_full = "\n".join(texto_geral)
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            _botao_whatsapp("Abrir WhatsApp - Geral", TELEFONE_WHATSAPP_GERAL_DIARIO, texto_full)
+        with c2:
+            st.download_button("Baixar texto diário (.txt)", texto_full.encode("utf-8"), file_name=f"relatorio_diario_{data_rel.strftime('%Y%m%d')}.txt", mime="text/plain")
+        st.text_area("Texto geral diário", texto_full, height=360)
+
+        st.subheader("Envio por loja")
+        for k, loja_nome, bloco in blocos:
+            with st.expander(loja_nome, expanded=False):
+                cols = st.columns([1, 1])
+                numero = TELEFONES_WHATSAPP_LOJAS.get(k)
+                if numero:
+                    with cols[0]:
+                        _botao_whatsapp(f"Abrir WhatsApp - {loja_nome}", numero, bloco)
+                with cols[1]:
+                    st.download_button(f"Baixar {loja_nome}.txt", bloco.encode("utf-8"), file_name=f"relatorio_diario_{k}_{data_rel.strftime('%Y%m%d')}.txt", mime="text/plain", key=f"down_daily_{k}")
+                st.text_area(f"Texto {loja_nome}", bloco, height=260, key=f"txt_daily_{k}")
+        return
+
+    # Relatório parcial/mensal
+    data_max_rel = datas_validas_rel.max().date()
+    mes_padrao = data_max_rel.month
+    mes = st.selectbox("Mês do relatório", options=[m for m, _ in MESES], index=mes_padrao - 1, format_func=lambda m: f"{m:02d} - {MESES[m-1][1]}")
+    data_ini_rel = date(ANO_ATUAL, mes, 1)
+    data_fim_rel = st.date_input("Data final do relatório parcial", value=data_max_rel, min_value=data_ini_rel, max_value=data_max_rel)
+    df_rel = df_base[df_base["DATA"].notna()].copy()
+    df_rel = df_rel[(df_rel["DATA"].dt.year == ANO_ATUAL) & (df_rel["DATA"].dt.month == mes) & (df_rel["DATA"].dt.date >= data_ini_rel) & (df_rel["DATA"].dt.date <= data_fim_rel)].copy()
+
+    metas, ano1, dias_uteis_mes = _referencias_mes(lojas_keys, mes)
+    meta_map = metas.groupby("LOJA_KEY")["META"].sum().to_dict() if not metas.empty else {}
+    ano1_map = ano1.groupby("LOJA_KEY")["VENDAS_2025"].sum().to_dict() if not ano1.empty else {}
+
+    realizado_total = float(df_rel["FAT_LINHA"].sum()) if len(df_rel) else 0.0
+    dias_venda_total = _dias_equivalentes_vendidos(df_rel)
+    previsao_total = (realizado_total / dias_venda_total * dias_uteis_mes) if dias_venda_total else realizado_total
+    meta_total = float(sum(meta_map.values())) if meta_map else 0.0
+    ano1_total = float(sum(ano1_map.values())) if ano1_map else 0.0
+    dif_ano1_total = previsao_total - ano1_total
+    dif_meta_total = previsao_total - meta_total
+    ating_total = (previsao_total / meta_total * 100) if meta_total else None
+    cresc_total = (dif_ano1_total / ano1_total * 100) if ano1_total else None
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Faturamento atual", _money(realizado_total))
+    m2.metric("Previsão fechamento", _money(previsao_total))
+    m3.metric("Prev. x Ano-1", _money(dif_ano1_total), _pct(cresc_total))
+    m4.metric("Prev. x Meta", _money(dif_meta_total), _pct(ating_total))
+    st.dataframe(_linhas_dataframe(df_rel), use_container_width=True, hide_index=True)
+
+    blocos = []
+    texto_geral = [
+        f"📊 *Segue análise parcial de {MESES[mes-1][1].title()}*",
+        "",
+        f"Período analisado: *{_periodo_texto(data_ini_rel, data_fim_rel)}*",
+        "",
+        f"Até o momento, o faturamento total está em *{_money(realizado_total)}*.",
+        f"Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao_total)}*.",
+        "",
+        f"{'🟢' if dif_ano1_total >= 0 else '🔴'} Na comparação com o Ano-1, a projeção indica *{_money(abs(dif_ano1_total))} {'acima' if dif_ano1_total >= 0 else 'abaixo'}*, ou seja, *{_pct(cresc_total)}*.",
+        f"{'🟢' if dif_meta_total >= 0 else '🔴'} Contra a meta do mês, a projeção indica *{_money(abs(dif_meta_total))} {'acima' if dif_meta_total >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating_total)}*.",
+        "",
+        "*Visão por loja*",
+    ]
+    resumo_rows = []
+    for k in lojas_keys:
+        loja_nome = str(lojas_map.get(k, k))
+        df_loja = df_rel[df_rel["LOJA_KEY"] == k].copy()
+        meta = float(meta_map.get(k, 0.0) or 0.0)
+        ano1_val = float(ano1_map.get(k, 0.0) or 0.0)
+        realizado = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
+        dias_venda = _dias_equivalentes_vendidos(df_loja)
+        previsao = (realizado / dias_venda * dias_uteis_mes) if dias_venda else realizado
+        ating = (previsao / meta * 100) if meta else None
+        dif_ano1 = previsao - ano1_val
+        cresc = (dif_ano1 / ano1_val * 100) if ano1_val else None
+        status = "🟢" if ating is not None and ating >= 100 else ("🟡" if ating is not None and ating >= 70 else "🔴")
+        texto_geral.append(f"{status} *{loja_nome}* está com *{_money(realizado)}* faturados. Previsão: *{_money(previsao)}*, variação de *{_pct(cresc)}* contra Ano-1 e *{_pct(ating)}* da meta.")
+        resumo_rows.append({"Loja": loja_nome, "Atual": _money(realizado), "Previsão": _money(previsao), "% Meta": _pct(ating)})
+        bloco = _montar_relatorio_mensal_loja(df_loja, loja_nome, data_ini_rel, data_fim_rel, mes, meta, ano1_val, dias_uteis_mes, valor_col)
+        blocos.append((k, loja_nome, bloco))
+
+    texto_geral += ["", _linhas_texto(df_rel).replace("*Segmentos*", "*Análise por linhas*"), "", _rank_text(df_rel, "MARCA_N", "Top 10 marcas até o momento", "FAT_LINHA"), "", "==============================", "RELATÓRIOS POR LOJA", "=============================="]
+    for _, _, bloco in blocos:
+        texto_geral += ["", "------------------------------", bloco]
+    texto_full = "\n".join(texto_geral)
+
+    st.subheader("Visão por loja")
+    st.dataframe(pd.DataFrame(resumo_rows), use_container_width=True, hide_index=True)
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        _botao_whatsapp("Abrir WhatsApp - Geral mensal", TELEFONE_WHATSAPP_GERAL_MENSAL, texto_full)
+    with c2:
+        st.download_button("Baixar texto mensal (.txt)", texto_full.encode("utf-8"), file_name=f"relatorio_mensal_{ANO_ATUAL}_{mes:02d}.txt", mime="text/plain")
+    st.text_area("Texto geral mensal", texto_full, height=360)
+
+    st.subheader("Envio por loja")
+    for k, loja_nome, bloco in blocos:
+        with st.expander(loja_nome, expanded=False):
+            cols = st.columns([1, 1])
+            numero = TELEFONES_WHATSAPP_LOJAS.get(k)
+            if numero:
+                with cols[0]:
+                    _botao_whatsapp(f"Abrir WhatsApp - {loja_nome}", numero, bloco)
+            with cols[1]:
+                st.download_button(f"Baixar {loja_nome}.txt", bloco.encode("utf-8"), file_name=f"relatorio_mensal_{k}_{ANO_ATUAL}_{mes:02d}.txt", mime="text/plain", key=f"down_month_{k}")
+            st.text_area(f"Texto {loja_nome}", bloco, height=260, key=f"txt_month_{k}")
+
+
 # =========================
 # Carrega e prepara base
 # =========================
@@ -703,6 +1036,14 @@ df = df[df["FAT_LINHA"].notna()].copy()
 # ========= Define a métrica de valor do cliente =========
 use_vr_total = df["VR_TOTAL_NUM"].notna().any()
 VAL_COL = "VR_TOTAL_NUM" if use_vr_total else "FAT_LINHA"
+
+# =========================
+# Navegação
+# =========================
+pagina_app = st.sidebar.radio("Página", ["Dashboard", "Relatórios"], index=0)
+if pagina_app == "Relatórios":
+    render_relatorios_whatsapp(df, VAL_COL)
+    st.stop()
 
 # =========================
 # Sidebar filtros
