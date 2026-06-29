@@ -1012,19 +1012,47 @@ def _linhas_dataframe(df_base: pd.DataFrame) -> pd.DataFrame:
     return tab
 
 
+def _peso_dia_comercial(data_val) -> float:
+    """Peso comercial do dia.
+
+    Regra:
+    - Segunda a sexta = 1,0
+    - Sábado = 0,5
+    - Domingo = 0,0
+    """
+    try:
+        dt = pd.to_datetime(data_val)
+        if pd.isna(dt):
+            return 0.0
+        dow = int(dt.dayofweek)
+        if dow <= 4:
+            return 1.0
+        if dow == 5:
+            return 0.5
+        return 0.0
+    except Exception:
+        return 0.0
+
+
+def _coluna_valor_vendas(df_base: pd.DataFrame) -> str | None:
+    """Escolhe a melhor coluna de valor para apurar movimento diário."""
+    for col in ["FAT_LINHA", "VENDAS_2026", "VR_TOTAL_NUM", "VR_TOTAL"]:
+        if col in df_base.columns:
+            return col
+    return None
+
+
 def _dias_equivalentes_vendidos(df_base: pd.DataFrame) -> float:
     """Conta somente dias com venda real positiva.
 
-    Regra gerencial:
-    - Dias com faturamento total igual a zero não entram no contador, pois normalmente
-      indicam feriado, loja fechada ou ausência de movimento.
-    - Sábados com venda positiva contam como 0,5 dia.
-    - Demais dias com venda positiva contam como 1,0 dia.
+    Uso principal: leituras históricas simples. Para previsão mensal, use
+    _calcular_calendario_comercial_mes, que diferencia dia realizado, dia
+    restante e feriado/dia sem expediente.
     """
     if df_base.empty or "DATA" not in df_base.columns:
         return 0.0
 
-    valor_col = "FAT_LINHA" if "FAT_LINHA" in df_base.columns else None
+    valor_col = _coluna_valor_vendas(df_base)
     if valor_col is None:
         return 0.0
 
@@ -1043,8 +1071,101 @@ def _dias_equivalentes_vendidos(df_base: pd.DataFrame) -> float:
     if diario.empty:
         return 0.0
 
-    diario["PESO_DIA"] = diario["DATA_DIA"].dt.dayofweek.map(lambda x: 0.5 if x == 5 else 1.0)
+    diario["PESO_DIA"] = diario["DATA_DIA"].apply(_peso_dia_comercial)
+    diario = diario[diario["PESO_DIA"] > 0].copy()
     return float(diario["PESO_DIA"].sum())
+
+
+def _calcular_calendario_comercial_mes(df_base: pd.DataFrame, ano: int, mes: int, data_fim_rel=None) -> dict:
+    """Calcula o calendário comercial válido para previsão.
+
+    Lógica aplicada:
+    - Segunda a sexta = 1 dia.
+    - Sábado = 0,5 dia.
+    - Domingo = 0.
+    - Dia comercial já ocorrido com faturamento total da empresa igual a zero é
+      removido do total do mês, pois normalmente representa feriado ou fechamento
+      geral da operação.
+    - Dias futuros continuam no total do mês para compor os dias restantes.
+    """
+    import calendar
+
+    ano = int(ano)
+    mes = int(mes)
+    primeiro_dia = pd.Timestamp(date(ano, mes, 1))
+    ultimo_dia = pd.Timestamp(date(ano, mes, calendar.monthrange(ano, mes)[1]))
+
+    if data_fim_rel is None:
+        data_corte = ultimo_dia
+    else:
+        data_corte = pd.to_datetime(data_fim_rel)
+        if pd.isna(data_corte):
+            data_corte = ultimo_dia
+        data_corte = min(data_corte.normalize(), ultimo_dia)
+
+    calendario = pd.DataFrame({"DATA_DIA": pd.date_range(primeiro_dia, ultimo_dia, freq="D")})
+    calendario["PESO_DIA"] = calendario["DATA_DIA"].apply(_peso_dia_comercial)
+    calendario = calendario[calendario["PESO_DIA"] > 0].copy()
+
+    if calendario.empty:
+        return {
+            "dias_comerciais_base": 0.0,
+            "dias_validos_mes": 0.0,
+            "dias_realizados": 0.0,
+            "dias_restantes": 0.0,
+            "dias_ignorados": [],
+            "datas_ignoradas_txt": "",
+        }
+
+    valor_col = _coluna_valor_vendas(df_base) if df_base is not None and not df_base.empty else None
+    if df_base is not None and not df_base.empty and "DATA" in df_base.columns and valor_col:
+        mov = df_base[df_base["DATA"].notna()].copy()
+        mov = mov[(mov["DATA"].dt.year == ano) & (mov["DATA"].dt.month == mes)].copy()
+        mov[valor_col] = pd.to_numeric(mov[valor_col], errors="coerce").fillna(0.0)
+        diario = (
+            mov.assign(DATA_DIA=mov["DATA"].dt.normalize())
+            .groupby("DATA_DIA", as_index=False)[valor_col]
+            .sum()
+            .rename(columns={valor_col: "FAT_DIA_EMPRESA"})
+        )
+    else:
+        diario = pd.DataFrame(columns=["DATA_DIA", "FAT_DIA_EMPRESA"])
+
+    cal = calendario.merge(diario, on="DATA_DIA", how="left")
+    cal["FAT_DIA_EMPRESA"] = pd.to_numeric(cal["FAT_DIA_EMPRESA"], errors="coerce").fillna(0.0)
+
+    cal_ate_corte = cal[cal["DATA_DIA"] <= data_corte].copy()
+    ignorados = cal_ate_corte[cal_ate_corte["FAT_DIA_EMPRESA"] <= 0].copy()
+    datas_ignoradas = [d.strftime("%d/%m") for d in ignorados["DATA_DIA"].dt.to_pydatetime()]
+
+    dias_comerciais_base = float(cal["PESO_DIA"].sum())
+    peso_ignorado = float(ignorados["PESO_DIA"].sum()) if not ignorados.empty else 0.0
+    dias_validos_mes = max(dias_comerciais_base - peso_ignorado, 0.0)
+
+    realizados = cal_ate_corte[cal_ate_corte["FAT_DIA_EMPRESA"] > 0].copy()
+    dias_realizados = float(realizados["PESO_DIA"].sum()) if not realizados.empty else 0.0
+    dias_restantes = max(dias_validos_mes - dias_realizados, 0.0)
+
+    return {
+        "dias_comerciais_base": dias_comerciais_base,
+        "dias_validos_mes": dias_validos_mes,
+        "dias_realizados": dias_realizados,
+        "dias_restantes": dias_restantes,
+        "dias_ignorados": datas_ignoradas,
+        "datas_ignoradas_txt": ", ".join(datas_ignoradas),
+    }
+
+
+def _previsao_por_calendario(realizado: float, dias_realizados: float, dias_restantes: float) -> tuple[float, float]:
+    """Retorna (previsão, média diária) usando dias realizados e dias restantes."""
+    realizado = float(realizado or 0.0)
+    dias_realizados = float(dias_realizados or 0.0)
+    dias_restantes = float(dias_restantes or 0.0)
+    if dias_realizados <= 0:
+        return realizado, 0.0
+    media_dia = realizado / dias_realizados
+    previsao = realizado + (media_dia * max(dias_restantes, 0.0))
+    return float(previsao), float(media_dia)
 
 
 def _referencias_mes(lojas_keys: list[str], mes: int):
@@ -1217,11 +1338,17 @@ def _montar_relatorio_diario_loja(df_loja: pd.DataFrame, loja_nome: str, data_re
     return "\n".join(partes)
 
 
-def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_ini_rel, data_fim_rel, mes: int, meta: float, ano1: float, dias_uteis_mes: float, valor_col: str, mes_fechado: bool = False) -> str:
+def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_ini_rel, data_fim_rel, mes: int, meta: float, ano1: float, dias_uteis_mes: float, valor_col: str, mes_fechado: bool = False, info_dias: dict | None = None) -> str:
     realizado = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
-    dias_venda = _dias_equivalentes_vendidos(df_loja)
-    media_dia = (realizado / dias_venda) if dias_venda else 0.0
-    previsao = media_dia * dias_uteis_mes if dias_uteis_mes else realizado
+    if info_dias is not None:
+        dias_venda = float(info_dias.get("dias_realizados", 0.0) or 0.0)
+        dias_restantes = float(info_dias.get("dias_restantes", 0.0) or 0.0)
+        dias_uteis_mes = float(info_dias.get("dias_validos_mes", dias_uteis_mes) or dias_uteis_mes or 0.0)
+    else:
+        dias_venda = _dias_equivalentes_vendidos(df_loja)
+        dias_restantes = max(float(dias_uteis_mes or 0.0) - float(dias_venda or 0.0), 0.0)
+
+    previsao, media_dia = _previsao_por_calendario(realizado, dias_venda, dias_restantes)
     resultado_ref = realizado if mes_fechado else previsao
     dif_ano1 = resultado_ref - float(ano1 or 0)
     cresc = (dif_ano1 / float(ano1) * 100) if ano1 else None
@@ -1252,11 +1379,23 @@ def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_in
             else ("a loja está projetando fechamento acima da meta. O foco agora é sustentar o ritmo e proteger as linhas de maior peso." if dif_meta >= 0 else "a loja precisa acelerar para reduzir a distância da meta até o fechamento do mês.")
         )
 
+    texto_dias = ""
+    if not mes_fechado and info_dias is not None:
+        ignorados_txt = str(info_dias.get("datas_ignoradas_txt", "") or "").strip()
+        texto_dias = (
+            f"Dias de venda considerados: *{format_decimal_pt(dias_venda, 1)}* realizados, "
+            f"*{format_decimal_pt(dias_restantes, 1)}* restantes e "
+            f"*{format_decimal_pt(dias_uteis_mes, 1)}* válidos no mês."
+        )
+        if ignorados_txt:
+            texto_dias += f" Dias ignorados por venda zero na empresa: {ignorados_txt}."
+
     partes = [
         titulo_rel,
         f"Período: {_periodo_texto(data_ini_rel, data_fim_rel)}.",
         "",
         linha_resultado,
+        texto_dias,
         texto_meta_realizada,
         "",
         texto_ano1,
@@ -1356,13 +1495,16 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     df_rel = df_rel[(df_rel["DATA"].dt.year == ANO_ATUAL) & (df_rel["DATA"].dt.month == mes) & (df_rel["DATA"].dt.date >= data_ini_rel) & (df_rel["DATA"].dt.date <= data_fim_rel)].copy()
     mes_fechado = _mes_esta_fechado(df_base, ANO_ATUAL, mes, data_fim_rel)
 
-    metas, ano1, dias_uteis_mes = _referencias_mes(lojas_keys, mes)
+    metas, ano1, dias_uteis_mes_ref = _referencias_mes(lojas_keys, mes)
+    info_dias_mes = _calcular_calendario_comercial_mes(df_base, ANO_ATUAL, mes, data_fim_rel)
+    dias_uteis_mes = float(info_dias_mes.get("dias_validos_mes", dias_uteis_mes_ref) or dias_uteis_mes_ref or 0.0)
     meta_map = metas.groupby("LOJA_KEY")["META"].sum().to_dict() if not metas.empty else {}
     ano1_map = ano1.groupby("LOJA_KEY")["VENDAS_2025"].sum().to_dict() if not ano1.empty else {}
 
     realizado_total = float(df_rel["FAT_LINHA"].sum()) if len(df_rel) else 0.0
-    dias_venda_total = _dias_equivalentes_vendidos(df_rel)
-    previsao_total = (realizado_total / dias_venda_total * dias_uteis_mes) if dias_venda_total else realizado_total
+    dias_venda_total = float(info_dias_mes.get("dias_realizados", 0.0) or 0.0)
+    dias_restantes_total = float(info_dias_mes.get("dias_restantes", 0.0) or 0.0)
+    previsao_total, media_dia_total = _previsao_por_calendario(realizado_total, dias_venda_total, dias_restantes_total)
     meta_total = float(sum(meta_map.values())) if meta_map else 0.0
     ano1_total = float(sum(ano1_map.values())) if ano1_map else 0.0
     resultado_total_ref = realizado_total if mes_fechado else previsao_total
@@ -1377,6 +1519,13 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     m2.metric("Mês fechado" if mes_fechado else "Previsão fechamento", _money(resultado_total_ref))
     m3.metric(("Real x Ano-1" if mes_fechado else "Prev. x Ano-1"), _money(dif_ano1_total), _pct(cresc_total))
     m4.metric(("Real x Meta" if mes_fechado else "Prev. x Meta"), _money(dif_meta_total), _pct(ating_total))
+    if not mes_fechado:
+        st.caption(
+            f"Dias considerados na previsão: {format_decimal_pt(dias_venda_total, 1)} realizados, "
+            f"{format_decimal_pt(dias_restantes_total, 1)} restantes, "
+            f"{format_decimal_pt(dias_uteis_mes, 1)} válidos no mês."
+            + (f" Dias ignorados por venda zero na empresa: {info_dias_mes.get('datas_ignoradas_txt')}." if info_dias_mes.get("datas_ignoradas_txt") else "")
+        )
     st.dataframe(_linhas_dataframe(df_rel), use_container_width=True, hide_index=True)
 
     blocos = []
@@ -1402,6 +1551,8 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
             "",
             f"Até o momento, o faturamento total está em *{_money(realizado_total)}*.",
             f"Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao_total)}*.",
+            f"Dias de venda considerados: *{format_decimal_pt(dias_venda_total, 1)}* realizados, *{format_decimal_pt(dias_restantes_total, 1)}* restantes e *{format_decimal_pt(dias_uteis_mes, 1)}* válidos no mês.",
+            (f"Dias ignorados por venda zero na empresa: {info_dias_mes.get('datas_ignoradas_txt')}." if info_dias_mes.get("datas_ignoradas_txt") else ""),
             texto_meta_geral_realizada,
             "",
             f"{'🟢' if dif_ano1_total >= 0 else '🔴'} Na comparação com o Ano-1, a projeção indica *{_money(abs(dif_ano1_total))} {'acima' if dif_ano1_total >= 0 else 'abaixo'}*, ou seja, *{_pct(cresc_total)}*.",
@@ -1416,8 +1567,8 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         meta = float(meta_map.get(k, 0.0) or 0.0)
         ano1_val = float(ano1_map.get(k, 0.0) or 0.0)
         realizado = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
-        dias_venda = _dias_equivalentes_vendidos(df_loja)
-        previsao = (realizado / dias_venda * dias_uteis_mes) if dias_venda else realizado
+        dias_venda = dias_venda_total
+        previsao, _media_loja = _previsao_por_calendario(realizado, dias_venda_total, dias_restantes_total)
         resultado_ref = realizado if mes_fechado else previsao
         ating = (resultado_ref / meta * 100) if meta else None
         dif_ano1 = resultado_ref - ano1_val
@@ -1435,7 +1586,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
             else:
                 texto_geral.append(f"{status} *{loja_nome}* está com *{_money(realizado)}* faturados. Previsão: *{_money(previsao)}*, variação de *{_pct(cresc)}* contra Ano-1 e *{_pct(ating)}* da meta.")
         resumo_rows.append({"Loja": loja_nome, "Realizado": _money(realizado), "Previsão/Resultado": _money(resultado_ref), "% Meta": _pct(ating), "Status Meta": "Meta batida" if meta_batida_loja else ("Fechado abaixo da meta" if mes_fechado else "Em andamento")})
-        bloco = _montar_relatorio_mensal_loja(df_loja, loja_nome, data_ini_rel, data_fim_rel, mes, meta, ano1_val, dias_uteis_mes, valor_col, mes_fechado=mes_fechado)
+        bloco = _montar_relatorio_mensal_loja(df_loja, loja_nome, data_ini_rel, data_fim_rel, mes, meta, ano1_val, dias_uteis_mes, valor_col, mes_fechado=mes_fechado, info_dias=info_dias_mes)
         blocos.append((k, loja_nome, bloco))
 
     titulo_marcas_geral = "Top 10 marcas do mês fechado" if mes_fechado else "Top 10 marcas até o momento"
@@ -1657,30 +1808,36 @@ df_meta_sel = df_meta[df_meta["MES_NUM"].isin(mes_nums_sel)].copy()
 meta_total_sel = float(df_meta_sel["META"].sum()) if len(df_meta_sel) else 0.0
 real_total_sel = float(df_mes["VENDAS_2026"].sum()) if len(df_mes) else 0.0
 
-# ===== Previsão de fechamento (média do realizado / dias de venda equivalentes)
+# ===== Previsão de fechamento por calendário comercial ajustado
 df_prev = df_f.copy()
 df_prev = df_prev[df_prev["DATA"].notna()].copy()
 df_prev = df_prev[df_prev["DATA"].dt.month.isin(mes_nums_sel)].copy()
 
-if len(df_prev):
-    diaria_prev = (
-        df_prev.assign(DATA_DIA=df_prev["DATA"].dt.normalize())
-        .groupby("DATA_DIA", as_index=False)
-        .agg(FAT_DIA=("FAT_LINHA", "sum"))
-    )
-    diaria_prev["PESO_DIA"] = diaria_prev["DATA_DIA"].dt.dayofweek.map(lambda x: 0.5 if x == 5 else 1.0)
-    diaria_prev["PESO_DIA"] = diaria_prev["PESO_DIA"].fillna(1.0)
-    # Dias com FAT_DIA = 0 são ignorados no contador de dias de venda.
-    # Sábados positivos contam 0,5; demais dias positivos contam 1,0.
-    diaria_prev_valid = diaria_prev[diaria_prev["FAT_DIA"] > 0].copy()
-else:
-    diaria_prev = pd.DataFrame(columns=["DATA_DIA", "FAT_DIA", "PESO_DIA"])
-    diaria_prev_valid = diaria_prev.copy()
+# O calendário da previsão é calculado pela empresa inteira, e não apenas pelo
+# filtro de loja/vendedor. Assim, um dia útil sem venda em uma loja específica
+# continua contando como dia comercial; só é removido quando a empresa inteira
+# ficou com venda zero naquele dia.
+infos_calendario = []
+for _mes_calc in mes_nums_sel:
+    try:
+        import calendar
+        _ultimo_mes = date(ANO_ATUAL, int(_mes_calc), calendar.monthrange(ANO_ATUAL, int(_mes_calc))[1])
+        _corte_mes = min(data_fim, _ultimo_mes)
+        infos_calendario.append(_calcular_calendario_comercial_mes(df, ANO_ATUAL, int(_mes_calc), _corte_mes))
+    except Exception:
+        pass
 
-dias_venda_equiv = float(diaria_prev_valid["PESO_DIA"].sum()) if len(diaria_prev_valid) else 0.0
-media_por_dia_venda = (real_total_sel / dias_venda_equiv) if dias_venda_equiv > 0 else None
-dias_uteis_equiv = float(sum(float(dias_uteis_map.get(m, 0.0) or 0.0) for m in mes_nums_sel))
-previsao_fechamento = (media_por_dia_venda * dias_uteis_equiv) if media_por_dia_venda is not None and dias_uteis_equiv > 0 else None
+dias_venda_equiv = float(sum(float(x.get("dias_realizados", 0.0) or 0.0) for x in infos_calendario))
+dias_uteis_equiv = float(sum(float(x.get("dias_validos_mes", 0.0) or 0.0) for x in infos_calendario))
+dias_restantes_equiv = float(sum(float(x.get("dias_restantes", 0.0) or 0.0) for x in infos_calendario))
+dias_ignorados_periodo = []
+for _info in infos_calendario:
+    dias_ignorados_periodo.extend(_info.get("dias_ignorados", []) or [])
+
+previsao_fechamento, media_por_dia_venda = _previsao_por_calendario(real_total_sel, dias_venda_equiv, dias_restantes_equiv)
+if dias_venda_equiv <= 0:
+    media_por_dia_venda = None
+    previsao_fechamento = None
 
 clientes_base = df_prev.copy()
 if "CLIENTE_N" in clientes_base.columns:
@@ -1699,7 +1856,7 @@ pc1, pc2, pc3, pc4, pc5 = st.columns(5)
 with pc1:
     st.metric("Faturamento Atual (R$)", "R$ " + format_brl(real_total_sel))
 with pc2:
-    st.metric("Dias de Venda", format_decimal_pt(dias_venda_equiv, 1))
+    st.metric("Dias de Venda", format_decimal_pt(dias_venda_equiv, 1), f"Restam {format_decimal_pt(dias_restantes_equiv, 1)}")
 with pc3:
     st.metric("Média por Dia de Venda", ("R$ " + format_brl(media_por_dia_venda)) if media_por_dia_venda is not None else "—")
 with pc4:
@@ -1707,7 +1864,11 @@ with pc4:
 with pc5:
     st.metric("Clientes Ativos", f"{clientes_ativos:,}".replace(",", "."))
 
-st.caption("Dias de venda consideram apenas datas com faturamento acima de zero. Aos sábados, cada dia conta como 0,5.")
+st.caption(
+    "Dias de venda: segunda a sexta = 1, sábado = 0,5. "
+    "Dias comerciais com venda zero na empresa inteira são tratados como feriado/dia sem expediente e saem da previsão."
+    + (f" Dias ignorados no recorte: {', '.join(dias_ignorados_periodo)}." if dias_ignorados_periodo else "")
+)
 
 a1, a2, a3 = st.columns([1.0, 1.0, 1.6], gap="large")
 with a1:
@@ -1914,25 +2075,14 @@ with st.expander("Abrir Tabela Previsão de Fechamento"):
     prev_base = df_2026.copy()
     prev_base = prev_base[prev_base["MES_NUM"].isin(mes_nums_sel)].copy()
 
-    if len(prev_base):
-        prev_base["DATA_DIA"] = prev_base["DATA"].dt.normalize()
-        diaria_loja = (
-            prev_base.groupby(["LOJA_KEY", "DATA_DIA"], dropna=False)["FAT_LINHA"]
-            .sum()
-            .reset_index(name="FAT_DIA")
-        )
-        # Por loja, dias zerados também não entram como dias de venda.
-        diaria_loja = diaria_loja[diaria_loja["FAT_DIA"] > 0].copy()
-        diaria_loja["PESO_DIA"] = diaria_loja["DATA_DIA"].dt.dayofweek.map(lambda x: 0.5 if x == 5 else 1.0)
-        diaria_loja["PESO_DIA"] = diaria_loja["PESO_DIA"].fillna(1.0)
-
-        dias_loja = (
-            diaria_loja.groupby("LOJA_KEY", dropna=False)["PESO_DIA"]
-            .sum()
-            .reset_index(name="DIAS_VENDA")
-        )
-    else:
-        dias_loja = pd.DataFrame(columns=["LOJA_KEY", "DIAS_VENDA"])
+    # Usa o mesmo contador de dias comerciais válidos para todas as lojas.
+    # Se apenas uma loja vendeu zero em um dia útil, esse dia continua contando;
+    # só sai do calendário quando a empresa inteira ficou sem venda.
+    lojas_prev_lista = sorted(set(prev_base["LOJA_KEY"].dropna().tolist()) | set(df_mes["LOJA_KEY"].dropna().tolist()) | set(df_meta_sel["LOJA_KEY"].dropna().tolist()))
+    dias_loja = pd.DataFrame({
+        "LOJA_KEY": lojas_prev_lista,
+        "DIAS_VENDA": [dias_venda_equiv] * len(lojas_prev_lista),
+    })
 
     realizado_loja = (
         df_mes.groupby("LOJA_KEY", dropna=False)["VENDAS_2026"]
@@ -1963,8 +2113,11 @@ with st.expander("Abrir Tabela Previsão de Fechamento"):
         lambda r: (r["REALIZADO_R$"] / r["DIAS_VENDA"]) if r["DIAS_VENDA"] not in (0, None) else None,
         axis=1,
     )
-    prev_tbl["PREVISAO_R$"] = prev_tbl["MEDIA_DIA_R$"].apply(
-        lambda v: (v * dias_uteis_equiv) if v is not None and not (isinstance(v, float) and pd.isna(v)) and dias_uteis_equiv > 0 else None
+    prev_tbl["PREVISAO_R$"] = prev_tbl.apply(
+        lambda r: (r["REALIZADO_R$"] + (r["MEDIA_DIA_R$"] * dias_restantes_equiv))
+        if r["MEDIA_DIA_R$"] is not None and not (isinstance(r["MEDIA_DIA_R$"], float) and pd.isna(r["MEDIA_DIA_R$"]))
+        else None,
+        axis=1,
     )
     prev_tbl["DIF_PREV_X_ANO1_R$"] = prev_tbl.apply(
         lambda r: (r["PREVISAO_R$"] - r["ANO_1_R$"]) if r["PREVISAO_R$"] is not None and not (isinstance(r["PREVISAO_R$"], float) and pd.isna(r["PREVISAO_R$"])) else None,
@@ -1996,7 +2149,7 @@ with st.expander("Abrir Tabela Previsão de Fechamento"):
         "META_R$": float(prev_tbl["META_R$"].sum()) if len(prev_tbl) else 0.0,
     }
     total_prev["MEDIA_DIA_R$"] = (total_prev["REALIZADO_R$"] / total_prev["DIAS_VENDA"]) if total_prev["DIAS_VENDA"] != 0 else None
-    total_prev["PREVISAO_R$"] = (total_prev["MEDIA_DIA_R$"] * dias_uteis_equiv) if total_prev["MEDIA_DIA_R$"] is not None and dias_uteis_equiv > 0 else None
+    total_prev["PREVISAO_R$"] = (total_prev["REALIZADO_R$"] + (total_prev["MEDIA_DIA_R$"] * dias_restantes_equiv)) if total_prev["MEDIA_DIA_R$"] is not None else None
     total_prev["DIF_PREV_X_ANO1_R$"] = (total_prev["PREVISAO_R$"] - total_prev["ANO_1_R$"]) if total_prev["PREVISAO_R$"] is not None else None
     total_prev["CRESC_%"] = (total_prev["DIF_PREV_X_ANO1_R$"] / total_prev["ANO_1_R$"] * 100) if total_prev["ANO_1_R$"] not in (0, None) and total_prev["DIF_PREV_X_ANO1_R$"] is not None else None
     total_prev["DIF_PREV_X_META_R$"] = (total_prev["PREVISAO_R$"] - total_prev["META_R$"]) if total_prev["PREVISAO_R$"] is not None else None
