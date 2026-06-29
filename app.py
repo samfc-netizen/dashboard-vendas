@@ -922,6 +922,33 @@ def _pct(v) -> str:
     return f"{float(v):.2f}%".replace(".", ",")
 
 
+def _status_meta_texto(realizado: float, meta: float, contexto: str = "loja") -> tuple[bool, str]:
+    """Retorna sinalização textual quando a meta já foi batida pelo realizado."""
+    realizado = float(realizado or 0.0)
+    meta = float(meta or 0.0)
+    if meta <= 0:
+        return False, ""
+
+    ating_real = (realizado / meta * 100) if meta else 0.0
+    saldo = realizado - meta
+
+    if saldo >= 0:
+        if contexto == "geral":
+            return True, (
+                f"🏆 *META GERAL JÁ BATIDA:* o realizado está em *{_pct(ating_real)}* da meta, "
+                f"com *{_money(saldo)}* acima do objetivo do mês."
+            )
+        return True, (
+            f"🏆 *META JÁ BATIDA:* a loja já realizou *{_pct(ating_real)}* da meta, "
+            f"ficando *{_money(saldo)}* acima do objetivo do mês."
+        )
+
+    return False, (
+        f"🎯 Meta ainda em andamento: realizado em *{_pct(ating_real)}* da meta, "
+        f"faltando *{_money(abs(saldo))}* para bater o objetivo."
+    )
+
+
 def _loja_ord_key(loja_key: str) -> tuple[int, str]:
     return (LOJA_KEY_RANK.get(str(loja_key), DEFAULT_RANK), str(loja_key))
 
@@ -1150,13 +1177,20 @@ def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_in
     cresc = (dif_ano1 / float(ano1) * 100) if ano1 else None
     dif_meta = previsao - float(meta or 0)
     ating = (previsao / float(meta) * 100) if meta else None
+    meta_batida, texto_meta_realizada = _status_meta_texto(realizado, meta, contexto="loja")
     emoji_ano1 = "🟢" if dif_ano1 >= 0 else "🔴"
-    emoji_meta = "🟢" if dif_meta >= 0 else "🔴"
+    emoji_meta = "🏆" if meta_batida else ("🟢" if dif_meta >= 0 else "🔴")
+    resumo_meta = (
+        "Meta já batida. O foco agora é manter ritmo, defender margem e aproveitar oportunidades de venda adicional."
+        if meta_batida
+        else ("a loja está projetando fechamento acima da meta. O foco agora é sustentar o ritmo e proteger as linhas de maior peso." if dif_meta >= 0 else "a loja precisa acelerar para reduzir a distância da meta até o fechamento do mês.")
+    )
     partes = [
         f"*{loja_nome} | Análise parcial de {MESES[mes-1][1].title()}*",
         f"Período: {_periodo_texto(data_ini_rel, data_fim_rel)}.",
         "",
         f"A loja está com *{_money(realizado)}* faturados até agora. Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao)}*.",
+        texto_meta_realizada,
         "",
         f"{emoji_ano1} Contra o Ano-1, a previsão fica *{_money(abs(dif_ano1))} {'acima' if dif_ano1 >= 0 else 'abaixo'}*, variação de *{_pct(cresc)}*.",
         f"{emoji_meta} Contra a meta, a previsão fica *{_money(abs(dif_meta))} {'acima' if dif_meta >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating)}*.",
@@ -1167,7 +1201,7 @@ def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_in
         "",
         _rank_text(df_loja, "CLIENTE_N", "Top 10 clientes da loja", valor_col),
         "",
-        "Resumo: " + ("a loja está projetando fechamento acima da meta. O foco agora é sustentar o ritmo e proteger as linhas de maior peso." if dif_meta >= 0 else "a loja precisa acelerar para reduzir a distância da meta até o fechamento do mês."),
+        "Resumo: " + resumo_meta,
     ]
     return "\n".join(partes)
 
@@ -1267,6 +1301,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     dif_meta_total = previsao_total - meta_total
     ating_total = (previsao_total / meta_total * 100) if meta_total else None
     cresc_total = (dif_ano1_total / ano1_total * 100) if ano1_total else None
+    meta_geral_batida, texto_meta_geral_realizada = _status_meta_texto(realizado_total, meta_total, contexto="geral")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Faturamento atual", _money(realizado_total))
@@ -1283,9 +1318,10 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         "",
         f"Até o momento, o faturamento total está em *{_money(realizado_total)}*.",
         f"Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao_total)}*.",
+        texto_meta_geral_realizada,
         "",
         f"{'🟢' if dif_ano1_total >= 0 else '🔴'} Na comparação com o Ano-1, a projeção indica *{_money(abs(dif_ano1_total))} {'acima' if dif_ano1_total >= 0 else 'abaixo'}*, ou seja, *{_pct(cresc_total)}*.",
-        f"{'🟢' if dif_meta_total >= 0 else '🔴'} Contra a meta do mês, a projeção indica *{_money(abs(dif_meta_total))} {'acima' if dif_meta_total >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating_total)}*.",
+        f"{'🏆' if meta_geral_batida else ('🟢' if dif_meta_total >= 0 else '🔴')} Contra a meta do mês, a projeção indica *{_money(abs(dif_meta_total))} {'acima' if dif_meta_total >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating_total)}*.",
         "",
         "*Visão por loja*",
     ]
@@ -1301,9 +1337,13 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         ating = (previsao / meta * 100) if meta else None
         dif_ano1 = previsao - ano1_val
         cresc = (dif_ano1 / ano1_val * 100) if ano1_val else None
-        status = "🟢" if ating is not None and ating >= 100 else ("🟡" if ating is not None and ating >= 70 else "🔴")
-        texto_geral.append(f"{status} *{loja_nome}* está com *{_money(realizado)}* faturados. Previsão: *{_money(previsao)}*, variação de *{_pct(cresc)}* contra Ano-1 e *{_pct(ating)}* da meta.")
-        resumo_rows.append({"Loja": loja_nome, "Atual": _money(realizado), "Previsão": _money(previsao), "% Meta": _pct(ating)})
+        meta_batida_loja, texto_meta_loja = _status_meta_texto(realizado, meta, contexto="loja")
+        status = "🏆" if meta_batida_loja else ("🟢" if ating is not None and ating >= 100 else ("🟡" if ating is not None and ating >= 70 else "🔴"))
+        if meta_batida_loja:
+            texto_geral.append(f"{status} *{loja_nome}* já bateu a meta: *{_money(realizado)}* realizados, *{_pct((realizado / meta * 100) if meta else None)}* da meta e *{_money(realizado - meta)}* acima do objetivo. Previsão: *{_money(previsao)}*.")
+        else:
+            texto_geral.append(f"{status} *{loja_nome}* está com *{_money(realizado)}* faturados. Previsão: *{_money(previsao)}*, variação de *{_pct(cresc)}* contra Ano-1 e *{_pct(ating)}* da meta.")
+        resumo_rows.append({"Loja": loja_nome, "Atual": _money(realizado), "Previsão": _money(previsao), "% Meta": _pct(ating), "Status Meta": "Meta batida" if meta_batida_loja else "Em andamento"})
         bloco = _montar_relatorio_mensal_loja(df_loja, loja_nome, data_ini_rel, data_fim_rel, mes, meta, ano1_val, dias_uteis_mes, valor_col)
         blocos.append((k, loja_nome, bloco))
 
