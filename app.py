@@ -92,6 +92,44 @@ def aplicar_estilo_visual():
             border-radius: 16px;
             padding: 14px 16px;
             box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+            min-height: 88px;
+            overflow: visible !important;
+        }
+
+        /* Corrige KPI cortado com reticências em cards estreitos */
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] [data-testid="stMetricLabel"],
+        div[data-testid="stMetric"] [data-testid="stMetricValue"],
+        div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+            overflow: visible !important;
+            text-overflow: clip !important;
+            white-space: normal !important;
+        }
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            color: #111827 !important;
+            font-size: clamp(18px, 1.55vw, 28px) !important;
+            line-height: 1.12 !important;
+            letter-spacing: -0.02em !important;
+            word-break: keep-all !important;
+        }
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
+            overflow: visible !important;
+            text-overflow: clip !important;
+            white-space: normal !important;
+            line-height: 1.12 !important;
+        }
+        div[data-testid="stMetric"] [data-testid="stMetricLabel"] {
+            font-size: 12px !important;
+            line-height: 1.25 !important;
+            color: #334155 !important;
+        }
+        div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+            font-size: 12px !important;
+        }
+        @media (max-width: 1200px) {
+            div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+                font-size: 20px !important;
+            }
         }
         .whatsapp-box {
             background: #f0fdf4;
