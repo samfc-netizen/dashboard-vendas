@@ -979,97 +979,112 @@ def _referencias_mes(lojas_keys: list[str], mes: int):
     return metas, ano1, dias_uteis
 
 
-def _criar_link_whatsapp(numero: str, texto: str) -> str:
-    return f"https://wa.me/{numero}?text={quote(texto)}"
+def _criar_link_whatsapp(numero: str, texto: str | None = None) -> str:
+    """Monta o link do WhatsApp.
 
-
-WHATSAPP_URL_CHAR_LIMIT = 3800
-
-
-def _quebrar_texto_whatsapp(texto: str, limite: int = WHATSAPP_URL_CHAR_LIMIT) -> list[str]:
-    """Divide textos longos para WhatsApp Web/wa.me.
-
-    O link wa.me usa o texto dentro da URL. Na prática, mensagens longas podem ser
-    cortadas ou nem carregar, dependendo do navegador/aparelho. Por isso o relatório
-    geral mensal é dividido em partes menores, preservando blocos e quebras de linha.
+    Quando o texto é enviado via parâmetro ?text=, navegadores podem cortar mensagens
+    grandes por limite de URL. Para relatórios longos, a aplicação agora usa o link
+    apenas com o número e copia o texto completo para a área de transferência.
     """
-    texto = str(texto or "")
-    if len(texto) <= limite:
-        return [texto]
-
-    blocos = re.split(r"\n(?=------------------------------|==============================|\*|📊|🟢|🟡|🔴|- )", texto)
-    partes = []
-    atual = ""
-    for bloco in blocos:
-        bloco = bloco.strip("\n")
-        candidato = (atual + "\n" + bloco).strip() if atual else bloco
-        if len(candidato) <= limite:
-            atual = candidato
-            continue
-        if atual:
-            partes.append(atual)
-            atual = ""
-        if len(bloco) <= limite:
-            atual = bloco
-        else:
-            linhas = bloco.splitlines()
-            pedaco = ""
-            for linha in linhas:
-                cand = (pedaco + "\n" + linha).strip() if pedaco else linha
-                if len(cand) <= limite:
-                    pedaco = cand
-                else:
-                    if pedaco:
-                        partes.append(pedaco)
-                    pedaco = linha[:limite]
-            if pedaco:
-                atual = pedaco
-    if atual:
-        partes.append(atual)
-
-    total = len(partes)
-    if total > 1:
-        partes = [f"*Parte {i}/{total}*\n\n{parte}" for i, parte in enumerate(partes, start=1)]
-    return partes
+    numero = re.sub(r"\D+", "", str(numero or ""))
+    if texto:
+        return f"https://wa.me/{numero}?text={quote(texto)}"
+    return f"https://wa.me/{numero}"
 
 
-def _botao_whatsapp(label: str, numero: str, texto: str):
-    partes = _quebrar_texto_whatsapp(texto)
-    if len(partes) == 1:
-        st.link_button(label, _criar_link_whatsapp(numero, partes[0]))
-        return
+def _botao_copiar_e_abrir_whatsapp(label: str, numero: str, texto: str, key: str):
+    """Botão visual: copia o relatório completo e abre o WhatsApp no contato.
 
-    st.markdown(
-        f"<div class='warning-box'>O texto ficou grande para um único link do WhatsApp. Foi dividido em <b>{len(partes)} partes</b> para evitar corte da mensagem.</div>",
-        unsafe_allow_html=True,
+    Observação técnica: por segurança, navegadores não permitem que uma página cole
+    automaticamente dentro do campo de mensagem do WhatsApp Web. O app deixa o texto
+    completo na área de transferência e abre o contato; se o navegador bloquear a cópia,
+    o usuário ainda consegue copiar pelo text_area exibido na tela.
+    """
+    numero_limpo = re.sub(r"\D+", "", str(numero or ""))
+    url = _criar_link_whatsapp(numero_limpo)
+    texto_js = json.dumps(str(texto or ""), ensure_ascii=False)
+    url_js = json.dumps(url, ensure_ascii=False)
+    label_js = json.dumps(label, ensure_ascii=False)
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", str(key or "whatsapp"))
+
+    st.components.v1.html(
+        f"""
+        <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+            <button id="btn_{safe_id}" style="
+                width: 100%;
+                border: 0;
+                border-radius: 14px;
+                padding: 13px 16px;
+                background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+                color: #ffffff;
+                font-weight: 800;
+                font-size: 15px;
+                cursor: pointer;
+                box-shadow: 0 8px 20px rgba(22, 163, 74, 0.22);
+            ">📲 {label_js.strip('"')}</button>
+            <div id="status_{safe_id}" style="margin-top: 8px; color: #334155; font-size: 12px; line-height: 1.35;"></div>
+        </div>
+        <script>
+        const texto_{safe_id} = {texto_js};
+        const url_{safe_id} = {url_js};
+        const status_{safe_id} = document.getElementById('status_{safe_id}');
+
+        async function copiarTexto_{safe_id}(txt) {{
+            if (navigator.clipboard && window.isSecureContext) {{
+                await navigator.clipboard.writeText(txt);
+                return true;
+            }}
+            const ta = document.createElement('textarea');
+            ta.value = txt;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            ta.style.top = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        }}
+
+        document.getElementById('btn_{safe_id}').addEventListener('click', async function() {{
+            try {{
+                await copiarTexto_{safe_id}(texto_{safe_id});
+                status_{safe_id}.innerHTML = '✅ Texto completo copiado. O WhatsApp será aberto no contato; cole a mensagem no campo de envio se ela não aparecer automaticamente.';
+            }} catch (e) {{
+                status_{safe_id}.innerHTML = '⚠️ O navegador bloqueou a cópia automática. Use o campo de texto abaixo para copiar manualmente.';
+            }}
+            window.open(url_{safe_id}, '_blank');
+        }});
+        </script>
+        """,
+        height=86,
     )
-    cols = st.columns(min(len(partes), 3))
-    for i, parte in enumerate(partes, start=1):
-        with cols[(i - 1) % len(cols)]:
-            st.link_button(f"{label} - parte {i}/{len(partes)}", _criar_link_whatsapp(numero, parte))
+
+
+def _botao_whatsapp(label: str, numero: str, texto: str, key: str | None = None):
+    key = key or f"wa_{abs(hash((label, numero, len(str(texto or ''))))) }"
+    _botao_copiar_e_abrir_whatsapp(label, numero, texto, key)
 
 
 def _render_whatsapp_downloads(prefixo_key: str, numero: str, texto: str, nome_arquivo: str, label_whatsapp: str, label_download: str):
-    partes = _quebrar_texto_whatsapp(texto)
     st.markdown(
         f"""
         <div class="whatsapp-box">
             <b>Envio WhatsApp</b><br>
-            Caracteres do relatório: {len(texto):,}. Partes para envio: {len(partes)}.
+            Relatório único com <b>{len(str(texto or '')):,}</b> caracteres.<br>
+            Ao clicar, o texto completo é copiado para a área de transferência e o WhatsApp abre direto no contato.
         </div>
         """.replace(",", "."),
         unsafe_allow_html=True,
     )
     c1, c2 = st.columns([1, 1])
     with c1:
-        _botao_whatsapp(label_whatsapp, numero, texto)
+        _botao_whatsapp(label_whatsapp, numero, texto, key=f"{prefixo_key}_wa_full")
     with c2:
         st.download_button(label_download, texto.encode("utf-8"), file_name=nome_arquivo, mime="text/plain", key=f"down_full_{prefixo_key}")
-    if len(partes) > 1:
-        with st.expander("Ver partes separadas para envio manual", expanded=False):
-            for i, parte in enumerate(partes, start=1):
-                st.text_area(f"Parte {i}/{len(partes)}", parte, height=220, key=f"{prefixo_key}_parte_{i}")
 
+    st.caption("Se o navegador bloquear a cópia automática, copie pelo campo abaixo e cole no WhatsApp aberto.")
 
 def _montar_relatorio_diario_loja(df_loja: pd.DataFrame, loja_nome: str, data_rel, valor_col: str) -> str:
     total = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
@@ -1125,7 +1140,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         """
         <div class="section-card">
             Gere relatórios diários ou parciais do mês, visualize o resumo na tela e envie pelo WhatsApp.
-            Textos longos são divididos automaticamente em partes para evitar corte no WhatsApp.
+            Textos longos agora são mantidos em um único relatório: o app copia tudo para a área de transferência e abre o WhatsApp no contato selecionado.
         </div>
         """,
         unsafe_allow_html=True,
