@@ -8,10 +8,169 @@ from datetime import date
 from urllib.parse import quote
 import io
 import zipfile
+import json
 from pathlib import Path
 
 st.set_page_config(page_title="Dashboard de Vendas", layout="wide")
-st.title("Dashboard de Vendas Dauto Tintas")
+
+# =========================================================
+# UX / VISUAL / PWA BÁSICO
+# =========================================================
+
+def aplicar_estilo_visual():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --app-bg: #f6f8fc;
+            --card-bg: #ffffff;
+            --text-main: #111827;
+            --text-muted: #475569;
+            --brand: #0f4c81;
+            --brand-2: #2563eb;
+            --border: #e5e7eb;
+            --success: #0f766e;
+            --warning: #b45309;
+            --danger: #b91c1c;
+        }
+
+        .stApp { background: var(--app-bg); }
+
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+            color: #ffffff;
+        }
+        section[data-testid="stSidebar"] * { color: #ffffff !important; }
+        section[data-testid="stSidebar"] input,
+        section[data-testid="stSidebar"] textarea,
+        section[data-testid="stSidebar"] select,
+        section[data-testid="stSidebar"] div[data-baseweb="select"] *,
+        section[data-testid="stSidebar"] div[data-baseweb="input"] input {
+            color: #111827 !important;
+            background-color: #ffffff !important;
+        }
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span {
+            color: #f8fafc !important;
+        }
+
+        .block-container { padding-top: 1.25rem; max-width: 1500px; }
+
+        .hero-card {
+            background: linear-gradient(135deg, #0f4c81 0%, #1d4ed8 52%, #0f172a 100%);
+            color: white;
+            border-radius: 22px;
+            padding: 28px 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+        }
+        .hero-card h1 { margin: 0; font-size: 32px; line-height: 1.1; color: #ffffff; }
+        .hero-card p { margin: 8px 0 0 0; color: #e2e8f0; font-size: 15px; }
+        .section-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 18px 20px;
+            margin: 12px 0 18px 0;
+            box-shadow: 0 8px 25px rgba(15, 23, 42, 0.06);
+        }
+        .mini-card {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 16px;
+            padding: 16px;
+            min-height: 96px;
+            box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+        }
+        .mini-card .label { color: #64748b; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+        .mini-card .value { color: #111827; font-size: 24px; font-weight: 800; }
+        .mini-card .hint { color: #64748b; font-size: 12px; margin-top: 4px; }
+        div[data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 16px;
+            padding: 14px 16px;
+            box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+        }
+        .whatsapp-box {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 16px;
+            padding: 16px;
+            margin: 10px 0 14px 0;
+            color: #14532d;
+        }
+        .warning-box {
+            background: #fff7ed;
+            border: 1px solid #fed7aa;
+            border-radius: 16px;
+            padding: 16px;
+            margin: 10px 0 14px 0;
+            color: #7c2d12;
+        }
+        textarea, input { color: #111827 !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_header():
+    st.markdown(
+        """
+        <div class="hero-card">
+            <h1>Dashboard de Vendas Dauto Tintas</h1>
+            <p>Indicadores comerciais, comparativos e relatórios prontos para WhatsApp.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def instalar_pwa_basico():
+    """Cria arquivos básicos de PWA e injeta manifest/service worker.
+    Observação: em Streamlit, o comportamento depende do deploy, HTTPS e permissões do navegador.
+    """
+    try:
+        manifest = {
+            "name": "Dashboard de Vendas Dauto Tintas",
+            "short_name": "Dauto Vendas",
+            "start_url": "./",
+            "display": "standalone",
+            "background_color": "#f6f8fc",
+            "theme_color": "#0f4c81",
+            "description": "Dashboard comercial com relatórios de vendas.",
+            "icons": [],
+        }
+        Path("manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path("sw.js").write_text(
+            """
+self.addEventListener('install', event => { self.skipWaiting(); });
+self.addEventListener('activate', event => { event.waitUntil(self.clients.claim()); });
+self.addEventListener('fetch', event => { event.respondWith(fetch(event.request)); });
+""".strip(),
+            encoding="utf-8",
+        )
+        st.components.v1.html(
+            """
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0f4c81">
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(function(e) { console.log('SW não registrado', e); });
+}
+</script>
+""",
+            height=0,
+        )
+    except Exception:
+        pass
+
+
+aplicar_estilo_visual()
+instalar_pwa_basico()
+render_header()
 
 top_card = st.empty()
 
@@ -824,8 +983,92 @@ def _criar_link_whatsapp(numero: str, texto: str) -> str:
     return f"https://wa.me/{numero}?text={quote(texto)}"
 
 
+WHATSAPP_URL_CHAR_LIMIT = 3800
+
+
+def _quebrar_texto_whatsapp(texto: str, limite: int = WHATSAPP_URL_CHAR_LIMIT) -> list[str]:
+    """Divide textos longos para WhatsApp Web/wa.me.
+
+    O link wa.me usa o texto dentro da URL. Na prática, mensagens longas podem ser
+    cortadas ou nem carregar, dependendo do navegador/aparelho. Por isso o relatório
+    geral mensal é dividido em partes menores, preservando blocos e quebras de linha.
+    """
+    texto = str(texto or "")
+    if len(texto) <= limite:
+        return [texto]
+
+    blocos = re.split(r"\n(?=------------------------------|==============================|\*|📊|🟢|🟡|🔴|- )", texto)
+    partes = []
+    atual = ""
+    for bloco in blocos:
+        bloco = bloco.strip("\n")
+        candidato = (atual + "\n" + bloco).strip() if atual else bloco
+        if len(candidato) <= limite:
+            atual = candidato
+            continue
+        if atual:
+            partes.append(atual)
+            atual = ""
+        if len(bloco) <= limite:
+            atual = bloco
+        else:
+            linhas = bloco.splitlines()
+            pedaco = ""
+            for linha in linhas:
+                cand = (pedaco + "\n" + linha).strip() if pedaco else linha
+                if len(cand) <= limite:
+                    pedaco = cand
+                else:
+                    if pedaco:
+                        partes.append(pedaco)
+                    pedaco = linha[:limite]
+            if pedaco:
+                atual = pedaco
+    if atual:
+        partes.append(atual)
+
+    total = len(partes)
+    if total > 1:
+        partes = [f"*Parte {i}/{total}*\n\n{parte}" for i, parte in enumerate(partes, start=1)]
+    return partes
+
+
 def _botao_whatsapp(label: str, numero: str, texto: str):
-    st.link_button(label, _criar_link_whatsapp(numero, texto))
+    partes = _quebrar_texto_whatsapp(texto)
+    if len(partes) == 1:
+        st.link_button(label, _criar_link_whatsapp(numero, partes[0]))
+        return
+
+    st.markdown(
+        f"<div class='warning-box'>O texto ficou grande para um único link do WhatsApp. Foi dividido em <b>{len(partes)} partes</b> para evitar corte da mensagem.</div>",
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(min(len(partes), 3))
+    for i, parte in enumerate(partes, start=1):
+        with cols[(i - 1) % len(cols)]:
+            st.link_button(f"{label} - parte {i}/{len(partes)}", _criar_link_whatsapp(numero, parte))
+
+
+def _render_whatsapp_downloads(prefixo_key: str, numero: str, texto: str, nome_arquivo: str, label_whatsapp: str, label_download: str):
+    partes = _quebrar_texto_whatsapp(texto)
+    st.markdown(
+        f"""
+        <div class="whatsapp-box">
+            <b>Envio WhatsApp</b><br>
+            Caracteres do relatório: {len(texto):,}. Partes para envio: {len(partes)}.
+        </div>
+        """.replace(",", "."),
+        unsafe_allow_html=True,
+    )
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        _botao_whatsapp(label_whatsapp, numero, texto)
+    with c2:
+        st.download_button(label_download, texto.encode("utf-8"), file_name=nome_arquivo, mime="text/plain", key=f"down_full_{prefixo_key}")
+    if len(partes) > 1:
+        with st.expander("Ver partes separadas para envio manual", expanded=False):
+            for i, parte in enumerate(partes, start=1):
+                st.text_area(f"Parte {i}/{len(partes)}", parte, height=220, key=f"{prefixo_key}_parte_{i}")
 
 
 def _montar_relatorio_diario_loja(df_loja: pd.DataFrame, loja_nome: str, data_rel, valor_col: str) -> str:
@@ -877,8 +1120,16 @@ def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_in
 
 
 def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
-    st.title("Relatórios")
-    st.caption("Relatórios em texto pronto para WhatsApp, com link direto para o número cadastrado por loja.")
+    st.markdown("## 📲 Relatórios para WhatsApp")
+    st.markdown(
+        """
+        <div class="section-card">
+            Gere relatórios diários ou parciais do mês, visualize o resumo na tela e envie pelo WhatsApp.
+            Textos longos são divididos automaticamente em partes para evitar corte no WhatsApp.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     datas_validas_rel = df_base["DATA"].dropna()
     if datas_validas_rel.empty:
@@ -918,11 +1169,14 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
             texto_geral += ["", "------------------------------", bloco]
         texto_full = "\n".join(texto_geral)
 
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            _botao_whatsapp("Abrir WhatsApp - Geral", TELEFONE_WHATSAPP_GERAL_DIARIO, texto_full)
-        with c2:
-            st.download_button("Baixar texto diário (.txt)", texto_full.encode("utf-8"), file_name=f"relatorio_diario_{data_rel.strftime('%Y%m%d')}.txt", mime="text/plain")
+        _render_whatsapp_downloads(
+            f"diario_{data_rel.strftime('%Y%m%d')}",
+            TELEFONE_WHATSAPP_GERAL_DIARIO,
+            texto_full,
+            f"relatorio_diario_{data_rel.strftime('%Y%m%d')}.txt",
+            "Abrir WhatsApp - Geral",
+            "Baixar texto diário (.txt)",
+        )
         st.text_area("Texto geral diário", texto_full, height=360)
 
         st.subheader("Envio por loja")
@@ -1007,11 +1261,14 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
 
     st.subheader("Visão por loja")
     st.dataframe(pd.DataFrame(resumo_rows), use_container_width=True, hide_index=True)
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        _botao_whatsapp("Abrir WhatsApp - Geral mensal", TELEFONE_WHATSAPP_GERAL_MENSAL, texto_full)
-    with c2:
-        st.download_button("Baixar texto mensal (.txt)", texto_full.encode("utf-8"), file_name=f"relatorio_mensal_{ANO_ATUAL}_{mes:02d}.txt", mime="text/plain")
+    _render_whatsapp_downloads(
+        f"mensal_{ANO_ATUAL}_{mes:02d}",
+        TELEFONE_WHATSAPP_GERAL_MENSAL,
+        texto_full,
+        f"relatorio_mensal_{ANO_ATUAL}_{mes:02d}.txt",
+        "Abrir WhatsApp - Geral mensal",
+        "Baixar texto mensal (.txt)",
+    )
     st.text_area("Texto geral mensal", texto_full, height=360)
 
     st.subheader("Envio por loja")
