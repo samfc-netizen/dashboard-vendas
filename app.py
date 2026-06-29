@@ -1013,13 +1013,38 @@ def _linhas_dataframe(df_base: pd.DataFrame) -> pd.DataFrame:
 
 
 def _dias_equivalentes_vendidos(df_base: pd.DataFrame) -> float:
+    """Conta somente dias com venda real positiva.
+
+    Regra gerencial:
+    - Dias com faturamento total igual a zero não entram no contador, pois normalmente
+      indicam feriado, loja fechada ou ausência de movimento.
+    - Sábados com venda positiva contam como 0,5 dia.
+    - Demais dias com venda positiva contam como 1,0 dia.
+    """
     if df_base.empty or "DATA" not in df_base.columns:
         return 0.0
+
+    valor_col = "FAT_LINHA" if "FAT_LINHA" in df_base.columns else None
+    if valor_col is None:
+        return 0.0
+
     dias = df_base[df_base["DATA"].notna()].copy()
     if dias.empty:
         return 0.0
-    datas = dias["DATA"].dt.normalize().drop_duplicates()
-    return float(sum(0.5 if d.dayofweek == 5 else 1.0 for d in datas))
+
+    dias[valor_col] = pd.to_numeric(dias[valor_col], errors="coerce").fillna(0.0)
+    diario = (
+        dias.assign(DATA_DIA=dias["DATA"].dt.normalize())
+        .groupby("DATA_DIA", as_index=False)[valor_col]
+        .sum()
+        .rename(columns={valor_col: "FAT_DIA"})
+    )
+    diario = diario[diario["FAT_DIA"] > 0].copy()
+    if diario.empty:
+        return 0.0
+
+    diario["PESO_DIA"] = diario["DATA_DIA"].dt.dayofweek.map(lambda x: 0.5 if x == 5 else 1.0)
+    return float(diario["PESO_DIA"].sum())
 
 
 def _referencias_mes(lojas_keys: list[str], mes: int):
@@ -1043,6 +1068,30 @@ def _referencias_mes(lojas_keys: list[str], mes: int):
         dias_uteis = sum(0.5 if pd.Timestamp(ano, mes, d).dayofweek == 5 else 1.0 for d in range(1, ultimo + 1) if pd.Timestamp(ano, mes, d).dayofweek <= 5)
     return metas, ano1, dias_uteis
 
+
+
+def _mes_esta_fechado(df_base: pd.DataFrame, ano: int, mes: int, data_fim_rel) -> bool:
+    """Detecta se o mês deve ser tratado como fechado no relatório.
+
+    Critérios:
+    - data final selecionada chegou ao último dia do mês; ou
+    - já existem registros de meses posteriores na base, indicando que aquele mês ficou para trás.
+    """
+    try:
+        import calendar
+        data_fim_rel = pd.to_datetime(data_fim_rel).date()
+        ultimo_dia_mes = date(int(ano), int(mes), calendar.monthrange(int(ano), int(mes))[1])
+        if data_fim_rel >= ultimo_dia_mes:
+            return True
+
+        if df_base is not None and not df_base.empty and "DATA" in df_base.columns:
+            datas = pd.to_datetime(df_base["DATA"], errors="coerce").dropna()
+            if not datas.empty:
+                max_data_base = datas.max().date()
+                return max_data_base > ultimo_dia_mes
+    except Exception:
+        return False
+    return False
 
 def _criar_link_whatsapp(numero: str, texto: str | None = None) -> str:
     """Monta o link do WhatsApp.
@@ -1168,32 +1217,50 @@ def _montar_relatorio_diario_loja(df_loja: pd.DataFrame, loja_nome: str, data_re
     return "\n".join(partes)
 
 
-def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_ini_rel, data_fim_rel, mes: int, meta: float, ano1: float, dias_uteis_mes: float, valor_col: str) -> str:
+def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_ini_rel, data_fim_rel, mes: int, meta: float, ano1: float, dias_uteis_mes: float, valor_col: str, mes_fechado: bool = False) -> str:
     realizado = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
     dias_venda = _dias_equivalentes_vendidos(df_loja)
     media_dia = (realizado / dias_venda) if dias_venda else 0.0
     previsao = media_dia * dias_uteis_mes if dias_uteis_mes else realizado
-    dif_ano1 = previsao - float(ano1 or 0)
+    resultado_ref = realizado if mes_fechado else previsao
+    dif_ano1 = resultado_ref - float(ano1 or 0)
     cresc = (dif_ano1 / float(ano1) * 100) if ano1 else None
-    dif_meta = previsao - float(meta or 0)
-    ating = (previsao / float(meta) * 100) if meta else None
+    dif_meta = resultado_ref - float(meta or 0)
+    ating = (resultado_ref / float(meta) * 100) if meta else None
     meta_batida, texto_meta_realizada = _status_meta_texto(realizado, meta, contexto="loja")
     emoji_ano1 = "🟢" if dif_ano1 >= 0 else "🔴"
     emoji_meta = "🏆" if meta_batida else ("🟢" if dif_meta >= 0 else "🔴")
-    resumo_meta = (
-        "Meta já batida. O foco agora é manter ritmo, defender margem e aproveitar oportunidades de venda adicional."
-        if meta_batida
-        else ("a loja está projetando fechamento acima da meta. O foco agora é sustentar o ritmo e proteger as linhas de maior peso." if dif_meta >= 0 else "a loja precisa acelerar para reduzir a distância da meta até o fechamento do mês.")
-    )
+
+    if mes_fechado:
+        titulo_rel = f"*{loja_nome} | Resultado final de {MESES[mes-1][1].title()}*"
+        linha_resultado = f"A loja encerrou o mês com faturamento realizado de *{_money(realizado)}*."
+        texto_ano1 = f"{emoji_ano1} Contra o Ano-1, o resultado ficou *{_money(abs(dif_ano1))} {'acima' if dif_ano1 >= 0 else 'abaixo'}*, variação de *{_pct(cresc)}*."
+        texto_meta = f"{emoji_meta} Contra a meta, o resultado ficou *{_money(abs(dif_meta))} {'acima' if dif_meta >= 0 else 'abaixo'}*, com atingimento realizado de *{_pct(ating)}*."
+        resumo_meta = (
+            "mês fechado com meta batida. O resultado deve ser reconhecido, preservando aprendizado das linhas e clientes que mais puxaram a performance."
+            if meta_batida
+            else "mês fechado abaixo da meta. Vale revisar plano de ação, carteira de clientes, mix e ritmo comercial para o próximo ciclo."
+        )
+    else:
+        titulo_rel = f"*{loja_nome} | Análise parcial de {MESES[mes-1][1].title()}*"
+        linha_resultado = f"A loja está com *{_money(realizado)}* faturados até agora. Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao)}*."
+        texto_ano1 = f"{emoji_ano1} Contra o Ano-1, a previsão fica *{_money(abs(dif_ano1))} {'acima' if dif_ano1 >= 0 else 'abaixo'}*, variação de *{_pct(cresc)}*."
+        texto_meta = f"{emoji_meta} Contra a meta, a previsão fica *{_money(abs(dif_meta))} {'acima' if dif_meta >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating)}*."
+        resumo_meta = (
+            "Meta já batida. O foco agora é manter ritmo, defender margem e aproveitar oportunidades de venda adicional."
+            if meta_batida
+            else ("a loja está projetando fechamento acima da meta. O foco agora é sustentar o ritmo e proteger as linhas de maior peso." if dif_meta >= 0 else "a loja precisa acelerar para reduzir a distância da meta até o fechamento do mês.")
+        )
+
     partes = [
-        f"*{loja_nome} | Análise parcial de {MESES[mes-1][1].title()}*",
+        titulo_rel,
         f"Período: {_periodo_texto(data_ini_rel, data_fim_rel)}.",
         "",
-        f"A loja está com *{_money(realizado)}* faturados até agora. Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao)}*.",
+        linha_resultado,
         texto_meta_realizada,
         "",
-        f"{emoji_ano1} Contra o Ano-1, a previsão fica *{_money(abs(dif_ano1))} {'acima' if dif_ano1 >= 0 else 'abaixo'}*, variação de *{_pct(cresc)}*.",
-        f"{emoji_meta} Contra a meta, a previsão fica *{_money(abs(dif_meta))} {'acima' if dif_meta >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating)}*.",
+        texto_ano1,
+        texto_meta,
         "",
         _linhas_texto(df_loja).replace("*Segmentos*", "*Linhas*"),
         "",
@@ -1287,6 +1354,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     data_fim_rel = st.date_input("Data final do relatório parcial", value=data_max_rel, min_value=data_ini_rel, max_value=data_max_rel)
     df_rel = df_base[df_base["DATA"].notna()].copy()
     df_rel = df_rel[(df_rel["DATA"].dt.year == ANO_ATUAL) & (df_rel["DATA"].dt.month == mes) & (df_rel["DATA"].dt.date >= data_ini_rel) & (df_rel["DATA"].dt.date <= data_fim_rel)].copy()
+    mes_fechado = _mes_esta_fechado(df_base, ANO_ATUAL, mes, data_fim_rel)
 
     metas, ano1, dias_uteis_mes = _referencias_mes(lojas_keys, mes)
     meta_map = metas.groupby("LOJA_KEY")["META"].sum().to_dict() if not metas.empty else {}
@@ -1297,34 +1365,50 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     previsao_total = (realizado_total / dias_venda_total * dias_uteis_mes) if dias_venda_total else realizado_total
     meta_total = float(sum(meta_map.values())) if meta_map else 0.0
     ano1_total = float(sum(ano1_map.values())) if ano1_map else 0.0
-    dif_ano1_total = previsao_total - ano1_total
-    dif_meta_total = previsao_total - meta_total
-    ating_total = (previsao_total / meta_total * 100) if meta_total else None
+    resultado_total_ref = realizado_total if mes_fechado else previsao_total
+    dif_ano1_total = resultado_total_ref - ano1_total
+    dif_meta_total = resultado_total_ref - meta_total
+    ating_total = (resultado_total_ref / meta_total * 100) if meta_total else None
     cresc_total = (dif_ano1_total / ano1_total * 100) if ano1_total else None
     meta_geral_batida, texto_meta_geral_realizada = _status_meta_texto(realizado_total, meta_total, contexto="geral")
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Faturamento atual", _money(realizado_total))
-    m2.metric("Previsão fechamento", _money(previsao_total))
-    m3.metric("Prev. x Ano-1", _money(dif_ano1_total), _pct(cresc_total))
-    m4.metric("Prev. x Meta", _money(dif_meta_total), _pct(ating_total))
+    m1.metric("Faturamento realizado" if mes_fechado else "Faturamento atual", _money(realizado_total))
+    m2.metric("Mês fechado" if mes_fechado else "Previsão fechamento", _money(resultado_total_ref))
+    m3.metric(("Real x Ano-1" if mes_fechado else "Prev. x Ano-1"), _money(dif_ano1_total), _pct(cresc_total))
+    m4.metric(("Real x Meta" if mes_fechado else "Prev. x Meta"), _money(dif_meta_total), _pct(ating_total))
     st.dataframe(_linhas_dataframe(df_rel), use_container_width=True, hide_index=True)
 
     blocos = []
-    texto_geral = [
-        f"📊 *Segue análise parcial de {MESES[mes-1][1].title()}*",
-        "",
-        f"Período analisado: *{_periodo_texto(data_ini_rel, data_fim_rel)}*",
-        "",
-        f"Até o momento, o faturamento total está em *{_money(realizado_total)}*.",
-        f"Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao_total)}*.",
-        texto_meta_geral_realizada,
-        "",
-        f"{'🟢' if dif_ano1_total >= 0 else '🔴'} Na comparação com o Ano-1, a projeção indica *{_money(abs(dif_ano1_total))} {'acima' if dif_ano1_total >= 0 else 'abaixo'}*, ou seja, *{_pct(cresc_total)}*.",
-        f"{'🏆' if meta_geral_batida else ('🟢' if dif_meta_total >= 0 else '🔴')} Contra a meta do mês, a projeção indica *{_money(abs(dif_meta_total))} {'acima' if dif_meta_total >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating_total)}*.",
-        "",
-        "*Visão por loja*",
-    ]
+    if mes_fechado:
+        texto_geral = [
+            f"📊 *Resultado final de {MESES[mes-1][1].title()}*",
+            "",
+            f"Período encerrado: *{_periodo_texto(data_ini_rel, data_fim_rel)}*",
+            "",
+            f"O mês foi fechado com faturamento realizado de *{_money(realizado_total)}*.",
+            texto_meta_geral_realizada,
+            "",
+            f"{'🟢' if dif_ano1_total >= 0 else '🔴'} Na comparação com o Ano-1, o resultado ficou *{_money(abs(dif_ano1_total))} {'acima' if dif_ano1_total >= 0 else 'abaixo'}*, ou seja, *{_pct(cresc_total)}*.",
+            f"{'🏆' if meta_geral_batida else ('🟢' if dif_meta_total >= 0 else '🔴')} Contra a meta do mês, o resultado ficou *{_money(abs(dif_meta_total))} {'acima' if dif_meta_total >= 0 else 'abaixo'}*, com atingimento realizado de *{_pct(ating_total)}*.",
+            "",
+            "*Visão por loja*",
+        ]
+    else:
+        texto_geral = [
+            f"📊 *Segue análise parcial de {MESES[mes-1][1].title()}*",
+            "",
+            f"Período analisado: *{_periodo_texto(data_ini_rel, data_fim_rel)}*",
+            "",
+            f"Até o momento, o faturamento total está em *{_money(realizado_total)}*.",
+            f"Mantido o ritmo atual, a previsão de fechamento é de *{_money(previsao_total)}*.",
+            texto_meta_geral_realizada,
+            "",
+            f"{'🟢' if dif_ano1_total >= 0 else '🔴'} Na comparação com o Ano-1, a projeção indica *{_money(abs(dif_ano1_total))} {'acima' if dif_ano1_total >= 0 else 'abaixo'}*, ou seja, *{_pct(cresc_total)}*.",
+            f"{'🏆' if meta_geral_batida else ('🟢' if dif_meta_total >= 0 else '🔴')} Contra a meta do mês, a projeção indica *{_money(abs(dif_meta_total))} {'acima' if dif_meta_total >= 0 else 'abaixo'}*, com atingimento previsto de *{_pct(ating_total)}*.",
+            "",
+            "*Visão por loja*",
+        ]
     resumo_rows = []
     for k in lojas_keys:
         loja_nome = str(lojas_map.get(k, k))
@@ -1334,20 +1418,28 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         realizado = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
         dias_venda = _dias_equivalentes_vendidos(df_loja)
         previsao = (realizado / dias_venda * dias_uteis_mes) if dias_venda else realizado
-        ating = (previsao / meta * 100) if meta else None
-        dif_ano1 = previsao - ano1_val
+        resultado_ref = realizado if mes_fechado else previsao
+        ating = (resultado_ref / meta * 100) if meta else None
+        dif_ano1 = resultado_ref - ano1_val
         cresc = (dif_ano1 / ano1_val * 100) if ano1_val else None
         meta_batida_loja, texto_meta_loja = _status_meta_texto(realizado, meta, contexto="loja")
         status = "🏆" if meta_batida_loja else ("🟢" if ating is not None and ating >= 100 else ("🟡" if ating is not None and ating >= 70 else "🔴"))
-        if meta_batida_loja:
-            texto_geral.append(f"{status} *{loja_nome}* já bateu a meta: *{_money(realizado)}* realizados, *{_pct((realizado / meta * 100) if meta else None)}* da meta e *{_money(realizado - meta)}* acima do objetivo. Previsão: *{_money(previsao)}*.")
+        if mes_fechado:
+            if meta_batida_loja:
+                texto_geral.append(f"{status} *{loja_nome}* fechou o mês com meta batida: *{_money(realizado)}* realizados, *{_pct((realizado / meta * 100) if meta else None)}* da meta e *{_money(realizado - meta)}* acima do objetivo.")
+            else:
+                texto_geral.append(f"{status} *{loja_nome}* fechou com *{_money(realizado)}* realizados, variação de *{_pct(cresc)}* contra Ano-1 e *{_pct(ating)}* da meta.")
         else:
-            texto_geral.append(f"{status} *{loja_nome}* está com *{_money(realizado)}* faturados. Previsão: *{_money(previsao)}*, variação de *{_pct(cresc)}* contra Ano-1 e *{_pct(ating)}* da meta.")
-        resumo_rows.append({"Loja": loja_nome, "Atual": _money(realizado), "Previsão": _money(previsao), "% Meta": _pct(ating), "Status Meta": "Meta batida" if meta_batida_loja else "Em andamento"})
-        bloco = _montar_relatorio_mensal_loja(df_loja, loja_nome, data_ini_rel, data_fim_rel, mes, meta, ano1_val, dias_uteis_mes, valor_col)
+            if meta_batida_loja:
+                texto_geral.append(f"{status} *{loja_nome}* já bateu a meta: *{_money(realizado)}* realizados, *{_pct((realizado / meta * 100) if meta else None)}* da meta e *{_money(realizado - meta)}* acima do objetivo. Previsão: *{_money(previsao)}*.")
+            else:
+                texto_geral.append(f"{status} *{loja_nome}* está com *{_money(realizado)}* faturados. Previsão: *{_money(previsao)}*, variação de *{_pct(cresc)}* contra Ano-1 e *{_pct(ating)}* da meta.")
+        resumo_rows.append({"Loja": loja_nome, "Realizado": _money(realizado), "Previsão/Resultado": _money(resultado_ref), "% Meta": _pct(ating), "Status Meta": "Meta batida" if meta_batida_loja else ("Fechado abaixo da meta" if mes_fechado else "Em andamento")})
+        bloco = _montar_relatorio_mensal_loja(df_loja, loja_nome, data_ini_rel, data_fim_rel, mes, meta, ano1_val, dias_uteis_mes, valor_col, mes_fechado=mes_fechado)
         blocos.append((k, loja_nome, bloco))
 
-    texto_geral += ["", _linhas_texto(df_rel).replace("*Segmentos*", "*Análise por linhas*"), "", _rank_text(df_rel, "MARCA_N", "Top 10 marcas até o momento", "FAT_LINHA"), "", "==============================", "RELATÓRIOS POR LOJA", "=============================="]
+    titulo_marcas_geral = "Top 10 marcas do mês fechado" if mes_fechado else "Top 10 marcas até o momento"
+    texto_geral += ["", _linhas_texto(df_rel).replace("*Segmentos*", "*Análise por linhas*"), "", _rank_text(df_rel, "MARCA_N", titulo_marcas_geral, "FAT_LINHA"), "", "==============================", "RELATÓRIOS POR LOJA", "=============================="]
     for _, _, bloco in blocos:
         texto_geral += ["", "------------------------------", bloco]
     texto_full = "\n".join(texto_geral)
@@ -1578,6 +1670,8 @@ if len(df_prev):
     )
     diaria_prev["PESO_DIA"] = diaria_prev["DATA_DIA"].dt.dayofweek.map(lambda x: 0.5 if x == 5 else 1.0)
     diaria_prev["PESO_DIA"] = diaria_prev["PESO_DIA"].fillna(1.0)
+    # Dias com FAT_DIA = 0 são ignorados no contador de dias de venda.
+    # Sábados positivos contam 0,5; demais dias positivos contam 1,0.
     diaria_prev_valid = diaria_prev[diaria_prev["FAT_DIA"] > 0].copy()
 else:
     diaria_prev = pd.DataFrame(columns=["DATA_DIA", "FAT_DIA", "PESO_DIA"])
@@ -1827,6 +1921,7 @@ with st.expander("Abrir Tabela Previsão de Fechamento"):
             .sum()
             .reset_index(name="FAT_DIA")
         )
+        # Por loja, dias zerados também não entram como dias de venda.
         diaria_loja = diaria_loja[diaria_loja["FAT_DIA"] > 0].copy()
         diaria_loja["PESO_DIA"] = diaria_loja["DATA_DIA"].dt.dayofweek.map(lambda x: 0.5 if x == 5 else 1.0)
         diaria_loja["PESO_DIA"] = diaria_loja["PESO_DIA"].fillna(1.0)
