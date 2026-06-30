@@ -181,14 +181,23 @@ def instalar_pwa_basico():
             "description": "Dashboard comercial com relatórios de vendas.",
             "icons": [],
         }
-        Path("manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        Path("sw.js").write_text(
+        def _pwa_write_if_changed(path, content):
+            path = Path(path)
+            try:
+                if path.exists() and path.read_text(encoding="utf-8") == content:
+                    return
+            except Exception:
+                pass
+            path.write_text(content, encoding="utf-8")
+
+        _pwa_write_if_changed("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        _pwa_write_if_changed(
+            "sw.js",
             """
 self.addEventListener('install', event => { self.skipWaiting(); });
 self.addEventListener('activate', event => { event.waitUntil(self.clients.claim()); });
 self.addEventListener('fetch', event => { event.respondWith(fetch(event.request)); });
 """.strip(),
-            encoding="utf-8",
         )
         st.components.v1.html(
             """
@@ -218,6 +227,76 @@ ARQUIVO_METAS = "METAS.xlsx"
 ARQUIVO_COMPRAS = "COMPRAS.xlsx"
 
 
+# Cache maior para evitar releitura pesada dos Excel a cada interação.
+# Use o botão "Recarregar agora" no menu lateral quando trocar as planilhas.
+CACHE_TTL_SEGUNDOS = 60 * 60
+
+COLUNAS_CATEGORIA_VENDAS = [
+    "LOJA_N", "VENDEDOR_N", "MARCA_N", "SEGMENTO_N", "LINHA_N", "LOJA_KEY"
+]
+
+
+def _write_text_if_changed(path: str | Path, content: str, encoding: str = "utf-8") -> None:
+    """Evita regravar arquivos estáticos em todo rerun do Streamlit."""
+    path = Path(path)
+    try:
+        if path.exists() and path.read_text(encoding=encoding) == content:
+            return
+    except Exception:
+        pass
+    path.write_text(content, encoding=encoding)
+
+
+def _read_excel_fast(source, sheet_name=0) -> pd.DataFrame:
+    """Leitura Excel com parâmetros mais leves.
+
+    na_filter=False reduz o custo de detecção automática de NaN em bases grandes.
+    A normalização numérica/data já é feita manualmente nas funções do app.
+    """
+    return pd.read_excel(source, sheet_name=sheet_name, engine="openpyxl", na_filter=False)
+
+
+def _otimizar_memoria_vendas(df: pd.DataFrame) -> pd.DataFrame:
+    """Reduz memória sem alterar as colunas usadas nas telas."""
+    if df is None or df.empty:
+        return df
+    for col in COLUNAS_CATEGORIA_VENDAS:
+        if col in df.columns:
+            try:
+                df[col] = df[col].astype("category")
+            except Exception:
+                pass
+    for col in ["QTD_NUM", "UNIT_NUM", "FAT_LINHA", "VR_TOTAL_NUM", "CUSTO_ST_NUM", "CUSTO_T_NUM"]:
+        if col in df.columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
+            except Exception:
+                pass
+    if "_ORDEM_LINHA" in df.columns:
+        try:
+            df["_ORDEM_LINHA"] = pd.to_numeric(df["_ORDEM_LINHA"], errors="coerce").fillna(0).astype("int32")
+        except Exception:
+            pass
+    return df
+
+
+def _otimizar_memoria_mov(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    for col in ["LOJA_N", "LOJA_KEY"]:
+        if col in df.columns:
+            try:
+                df[col] = df[col].astype("category")
+            except Exception:
+                pass
+    if "TOT_DOC_NUM" in df.columns:
+        try:
+            df["TOT_DOC_NUM"] = pd.to_numeric(df["TOT_DOC_NUM"], errors="coerce").astype("float32")
+        except Exception:
+            pass
+    return df
+
+
 def _nome_arquivo_key(nome: str) -> str:
     """Normaliza nome de arquivo para localizar variações com espaços/acentos."""
     return re.sub(r"[^A-Z0-9]", "", unicodedata.normalize("NFKD", str(nome).upper()).encode("ASCII", "ignore").decode("ASCII"))
@@ -242,7 +321,6 @@ def resolver_arquivo_excel(candidatos: list[str]) -> Path | None:
     return None
 
 
-@st.cache_data(ttl=10)
 def carregar_base_consolidada() -> pd.DataFrame:
     """Carrega a base de vendas.
 
@@ -257,7 +335,7 @@ def carregar_base_consolidada() -> pd.DataFrame:
     for nome in ARQUIVOS_BASE_SEPARADOS:
         caminho = resolver_arquivo_excel([nome])
         if caminho is not None:
-            dfx = pd.read_excel(caminho, sheet_name=0, engine="openpyxl")
+            dfx = _read_excel_fast(caminho, sheet_name=0)
             dfx["_ARQUIVO_BASE"] = caminho.name
             dfs.append(dfx)
             arquivos_encontrados.append(caminho.name)
@@ -267,7 +345,7 @@ def carregar_base_consolidada() -> pd.DataFrame:
 
     caminho_base_unica = resolver_arquivo_excel(["BASE.xlsx"])
     if caminho_base_unica is not None:
-        df_unica = pd.read_excel(caminho_base_unica, sheet_name=0, engine="openpyxl")
+        df_unica = _read_excel_fast(caminho_base_unica, sheet_name=0)
         df_unica["_ARQUIVO_BASE"] = caminho_base_unica.name
         return df_unica
 
@@ -281,7 +359,7 @@ def carregar_base_consolidada() -> pd.DataFrame:
             if arquivos_excel:
                 nome_excel = arquivos_excel[0]
                 with z.open(nome_excel) as f:
-                    df_zip = pd.read_excel(io.BytesIO(f.read()), sheet_name=0, engine="openpyxl")
+                    df_zip = _read_excel_fast(io.BytesIO(f.read()), sheet_name=0)
                     df_zip["_ARQUIVO_BASE"] = f"{ARQUIVO_ZIP}/{Path(nome_excel).name}"
                     return df_zip
 
@@ -304,7 +382,7 @@ def ler_excel_arquivo(nome_arquivo: str, sheet_name=0) -> pd.DataFrame:
     caminho = resolver_arquivo_excel([nome_arquivo])
     if caminho is None:
         raise FileNotFoundError(f"Arquivo {nome_arquivo} não encontrado na pasta do app.")
-    return pd.read_excel(caminho, sheet_name=sheet_name, engine="openpyxl")
+    return _read_excel_fast(caminho, sheet_name=sheet_name)
 
 
 # ========= Helpers =========
@@ -499,7 +577,7 @@ PLOT_CONFIG_INTERACTIVE_NO_ZOOM = {
 
 
 # ========= Cache de dados =========
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
 def carregar_dados():
     df = ler_excel_base(sheet_name=0)
     df.columns = df.columns.astype(str).str.strip()
@@ -627,10 +705,10 @@ def carregar_dados():
     # Chave canônica da loja
     df["LOJA_KEY"] = df["LOJA_N"].astype("string").fillna("").apply(canonical_key)
 
-    return df
+    return _otimizar_memoria_vendas(df)
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
 def carregar_movimentacoes_compras():
     """Lê as abas COMPRAS e DEVOLUÇÕES (ou variações do nome) e normaliza:
     - DATA (se existir)
@@ -713,10 +791,10 @@ def carregar_movimentacoes_compras():
     df_compras = _normalize_mov(df_compras_raw)
     df_devol = _normalize_mov(df_devol_raw)
 
-    return df_compras, df_devol
+    return _otimizar_memoria_mov(df_compras), _otimizar_memoria_mov(df_devol)
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
 def carregar_referencias_planejamento():
     def _read_first(candidates: list[str]) -> pd.DataFrame:
         # Agora Dias úteis, Meta Dauto Tintas e Ano-1 ficam no arquivo METAS.xlsx.
@@ -1680,6 +1758,7 @@ data_ini = st.sidebar.date_input("Data inicial", value=data_min, min_value=data_
 data_fim = st.sidebar.date_input("Data final", value=data_max, min_value=data_min, max_value=data_max)
 
 st.sidebar.divider()
+st.sidebar.caption("Performance: as bases ficam em cache por até 1 hora. Se trocar os arquivos Excel, clique abaixo.")
 if st.sidebar.button("Recarregar agora (ignorar cache)"):
     st.cache_data.clear()
     st.rerun()
