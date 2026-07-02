@@ -2621,12 +2621,14 @@ with col4:
             if key in {"", "SEMSEGMENTO", "NAN", "NONE"}:
                 return "Sem Segmento"
 
-            if "AUTOMOT" in key:
-                return "Automotivo"
-
-            if "THINNER" in key or "TINER" in key:
-                return "Thinner"
-
+            # Regra gerencial:
+            # - Automotivo deve ser apenas Automotivo.
+            # - Decor/Industrial soma Imobiliário, Industrial e Moveleira.
+            #
+            # Importante: esta verificação vem ANTES de Automotivo para corrigir
+            # casos em que o cadastro venha como "Automotivo / Moveleira" ou
+            # contenha a palavra Moveleira junto de Automotivo. Nesses casos,
+            # deve entrar em Decor/Industrial, não em Automotivo.
             if (
                 "IMOBILI" in key
                 or "DECOR" in key
@@ -2635,6 +2637,12 @@ with col4:
                 or "MOVEL" in key
             ):
                 return "Decor/Industrial"
+
+            if "THINNER" in key or "TINER" in key:
+                return "Thinner"
+
+            if "AUTOMOT" in key:
+                return "Automotivo"
 
             return "Outros Segmentos"
 
