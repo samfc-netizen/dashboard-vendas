@@ -577,7 +577,7 @@ PLOT_CONFIG_INTERACTIVE_NO_ZOOM = {
 
 
 # ========= Cache de dados =========
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
+@st.cache_resource(ttl=CACHE_TTL_SEGUNDOS, show_spinner="Carregando base de vendas...")
 def carregar_dados():
     df = ler_excel_base(sheet_name=0)
     df.columns = df.columns.astype(str).str.strip()
@@ -708,7 +708,7 @@ def carregar_dados():
     return _otimizar_memoria_vendas(df)
 
 
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
+@st.cache_resource(ttl=CACHE_TTL_SEGUNDOS, show_spinner="Carregando compras e devoluções...")
 def carregar_movimentacoes_compras():
     """Lê as abas COMPRAS e DEVOLUÇÕES (ou variações do nome) e normaliza:
     - DATA (se existir)
@@ -794,7 +794,7 @@ def carregar_movimentacoes_compras():
     return _otimizar_memoria_mov(df_compras), _otimizar_memoria_mov(df_devol)
 
 
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
+@st.cache_resource(ttl=CACHE_TTL_SEGUNDOS, show_spinner="Carregando metas e referências...")
 def carregar_referencias_planejamento():
     def _read_first(candidates: list[str]) -> pd.DataFrame:
         # Agora Dias úteis, Meta Dauto Tintas e Ano-1 ficam no arquivo METAS.xlsx.
@@ -1515,7 +1515,8 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     if modo == "Diário":
         data_padrao = datas_validas_rel.max().date()
         data_rel = st.date_input("Data do relatório diário", value=data_padrao, min_value=datas_validas_rel.min().date(), max_value=datas_validas_rel.max().date())
-        df_rel = df_base[df_base["DATA"].notna() & (df_base["DATA"].dt.date == data_rel)].copy()
+        data_rel_ts = pd.Timestamp(data_rel)
+        df_rel = df_base[df_base["DATA"].notna() & (df_base["DATA"].dt.normalize() == data_rel_ts)].copy()
         total = float(df_rel["FAT_LINHA"].sum()) if len(df_rel) else 0.0
         st.metric("Faturamento do dia", _money(total))
         st.dataframe(_linhas_dataframe(df_rel), use_container_width=True, hide_index=True)
@@ -1570,7 +1571,9 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     data_ini_rel = date(ANO_ATUAL, mes, 1)
     data_fim_rel = st.date_input("Data final do relatório parcial", value=data_max_rel, min_value=data_ini_rel, max_value=data_max_rel)
     df_rel = df_base[df_base["DATA"].notna()].copy()
-    df_rel = df_rel[(df_rel["DATA"].dt.year == ANO_ATUAL) & (df_rel["DATA"].dt.month == mes) & (df_rel["DATA"].dt.date >= data_ini_rel) & (df_rel["DATA"].dt.date <= data_fim_rel)].copy()
+    data_ini_rel_ts = pd.Timestamp(data_ini_rel)
+    data_fim_rel_ts = pd.Timestamp(data_fim_rel) + pd.Timedelta(days=1)
+    df_rel = df_rel[(df_rel["DATA"].dt.year == ANO_ATUAL) & (df_rel["DATA"].dt.month == mes) & (df_rel["DATA"] >= data_ini_rel_ts) & (df_rel["DATA"] < data_fim_rel_ts)].copy()
     mes_fechado = _mes_esta_fechado(df_base, ANO_ATUAL, mes, data_fim_rel)
 
     metas, ano1, dias_uteis_mes_ref = _referencias_mes(lojas_keys, mes)
@@ -1761,6 +1764,7 @@ st.sidebar.divider()
 st.sidebar.caption("Performance: as bases ficam em cache por até 1 hora. Se trocar os arquivos Excel, clique abaixo.")
 if st.sidebar.button("Recarregar agora (ignorar cache)"):
     st.cache_data.clear()
+    st.cache_resource.clear()
     st.rerun()
 
 # =========================
@@ -1779,7 +1783,9 @@ else:
     df_f = df_f.iloc[0:0]
 
 df_f = df_f[df_f["DATA"].notna()]
-df_f = df_f[(df_f["DATA"].dt.date >= data_ini) & (df_f["DATA"].dt.date <= data_fim)]
+data_ini_ts = pd.Timestamp(data_ini)
+data_fim_exclusivo_ts = pd.Timestamp(data_fim) + pd.Timedelta(days=1)
+df_f = df_f[(df_f["DATA"] >= data_ini_ts) & (df_f["DATA"] < data_fim_exclusivo_ts)]
 
 fat_total = float(df_f["FAT_LINHA"].sum()) if len(df_f) else 0.0
 
@@ -1833,7 +1839,7 @@ if vendedores_sel_aplicados:
 else:
     df_2026 = df_2026.iloc[0:0].copy()
 
-df_2026 = df_2026[(df_2026["DATA"].dt.date >= data_ini) & (df_2026["DATA"].dt.date <= data_fim)].copy()
+df_2026 = df_2026[(df_2026["DATA"] >= data_ini_ts) & (df_2026["DATA"] < data_fim_exclusivo_ts)].copy()
 df_2026["MES_NUM"] = df_2026["DATA"].dt.month
 
 df_2026_mensal = (
@@ -3304,7 +3310,7 @@ def _calc_indicador_compras_por_loja(df_f: pd.DataFrame, df_compras: pd.DataFram
 
         if "DATA" in out.columns and out["DATA"].notna().any():
             out = out[out["DATA"].notna()]
-            out = out[(out["DATA"].dt.date >= data_ini) & (out["DATA"].dt.date <= data_fim)]
+            out = out[(out["DATA"] >= pd.Timestamp(data_ini)) & (out["DATA"] < (pd.Timestamp(data_fim) + pd.Timedelta(days=1)))]
         return out
 
     comp_f = _aplicar_recorte_mov(df_compras)
