@@ -2432,17 +2432,39 @@ with st.expander("Ver produtos (CÓD + Descrição)"):
 st.subheader("Indicador: Marcas × Loja")
 
 marcas_mxl = sorted([x for x in df_f["MARCA_N"].dropna().astype(str).unique() if str(x).strip() != ""])
-marcas_sel_mxl = st.multiselect(
-    "Selecione uma ou mais marcas",
-    options=marcas_mxl,
-    default=[],
-    key="marcas_x_loja_sel",
-)
+
+# O seletor de marcas fica em um formulário próprio. Assim, marcar/desmarcar
+# opções não provoca o recálculo de todo o dashboard a cada clique.
+# Somente o botão abaixo aplica a seleção e executa os agrupamentos pesados.
+marcas_aplicadas_anteriores = [
+    m for m in st.session_state.get("marcas_x_loja_aplicadas", [])
+    if m in marcas_mxl
+]
+with st.form("form_marcas_x_loja", clear_on_submit=False):
+    marcas_escolhidas_mxl = st.multiselect(
+        "Selecione uma ou mais marcas",
+        options=marcas_mxl,
+        default=marcas_aplicadas_anteriores,
+        key="marcas_x_loja_widget",
+    )
+    aplicar_marcas_mxl = st.form_submit_button(
+        "Aplicar marcas",
+        use_container_width=True,
+        type="primary",
+    )
+
+if aplicar_marcas_mxl:
+    st.session_state["marcas_x_loja_aplicadas"] = list(marcas_escolhidas_mxl)
+
+marcas_sel_mxl = [
+    m for m in st.session_state.get("marcas_x_loja_aplicadas", [])
+    if m in marcas_mxl
+]
 
 if len(marcas_sel_mxl) == 0:
     st.info("Selecione ao menos uma marca para ver o ranking das lojas, as linhas e os produtos.")
 else:
-    df_mxl = df_f[df_f["MARCA_N"].isin(marcas_sel_mxl)].copy()
+    df_mxl = df_f.loc[df_f["MARCA_N"].isin(marcas_sel_mxl)]
 
     c_mxl_1, c_mxl_2 = st.columns([1.1, 1.2], gap="large")
 
