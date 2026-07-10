@@ -1721,7 +1721,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
 # Carrega e prepara base
 # =========================
 df = carregar_dados()
-df = df[df["FAT_LINHA"].notna()].copy()
+df = df.loc[df["FAT_LINHA"].notna()]
 
 # ========= Define a métrica de valor do cliente =========
 use_vr_total = df["VR_TOTAL_NUM"].notna().any()
@@ -1742,27 +1742,9 @@ st.sidebar.header("Filtros")
 
 lojas = sorted([x for x in df["LOJA_N"].dropna().astype(str).unique() if x.strip() != ""])
 opcoes_loja = ["TODAS"] + lojas
-lojas_sel = st.sidebar.multiselect("Lojas (LOJA)", opcoes_loja, default=["TODAS"])
-
-if "TODAS" in lojas_sel and len(lojas_sel) > 1:
-    lojas_sel = [x for x in lojas_sel if x != "TODAS"]
-
-if "TODAS" in lojas_sel:
-    lojas_sel_aplicadas = lojas[:]
-else:
-    lojas_sel_aplicadas = lojas_sel
 
 vendedores = sorted([x for x in df["VENDEDOR_N"].dropna().astype(str).unique() if x.strip() != ""])
 opcoes_vendedor = ["TODOS"] + vendedores
-vendedores_sel = st.sidebar.multiselect("Vendedor (VENDEDOR)", opcoes_vendedor, default=["TODOS"])
-
-if "TODOS" in vendedores_sel and len(vendedores_sel) > 1:
-    vendedores_sel = [x for x in vendedores_sel if x != "TODOS"]
-
-if "TODOS" in vendedores_sel:
-    vendedores_sel_aplicados = vendedores[:]
-else:
-    vendedores_sel_aplicados = vendedores_sel
 
 datas_validas = df["DATA"].dropna()
 if len(datas_validas) > 0:
@@ -1772,40 +1754,53 @@ else:
     data_min = date.today()
     data_max = date.today()
 
-st.sidebar.subheader("Período (DATA)")
-data_ini = st.sidebar.date_input("Data inicial", value=data_min, min_value=data_min, max_value=data_max)
-data_fim = st.sidebar.date_input("Data final", value=data_max, min_value=data_min, max_value=data_max)
+# Os filtros ficam dentro de um formulário para impedir que cada clique
+# dispare o recálculo completo do dashboard. O processamento ocorre uma
+# única vez, somente ao clicar em "Aplicar filtros".
+with st.sidebar.form("form_filtros_dashboard", clear_on_submit=False):
+    lojas_sel = st.multiselect("Lojas (LOJA)", opcoes_loja, default=["TODAS"])
+    vendedores_sel = st.multiselect("Vendedor (VENDEDOR)", opcoes_vendedor, default=["TODOS"])
+
+    st.subheader("Período (DATA)")
+    data_ini = st.date_input("Data inicial", value=data_min, min_value=data_min, max_value=data_max)
+    data_fim = st.date_input("Data final", value=data_max, min_value=data_min, max_value=data_max)
+
+    st.subheader("Meses")
+    mes_padrao_nome = MES_NUM_TO_NOME.get(data_max.month, "JAN")
+    mes_sel_multi = st.multiselect(
+        "Selecione 1 ou mais meses",
+        options=[nome for _, nome in MESES],
+        default=[mes_padrao_nome],
+    )
+
+    aplicar_filtros = st.form_submit_button("Aplicar filtros", use_container_width=True, type="primary")
+
+if "TODAS" in lojas_sel and len(lojas_sel) > 1:
+    lojas_sel = [x for x in lojas_sel if x != "TODAS"]
+lojas_sel_aplicadas = lojas[:] if "TODAS" in lojas_sel else lojas_sel
+
+if "TODOS" in vendedores_sel and len(vendedores_sel) > 1:
+    vendedores_sel = [x for x in vendedores_sel if x != "TODOS"]
+vendedores_sel_aplicados = vendedores[:] if "TODOS" in vendedores_sel else vendedores_sel
+
+if data_ini > data_fim:
+    data_ini, data_fim = data_fim, data_ini
+
+mes_nums_sel = [MES_NOME_TO_NUM[m] for m in mes_sel_multi if m in MES_NOME_TO_NUM]
+if not mes_nums_sel:
+    mes_nums_sel = meses_no_periodo(data_ini, data_fim)
+if not mes_nums_sel:
+    mes_nums_sel = [data_max.month]
+mes_nums_sel = sorted(set(mes_nums_sel))
 
 st.sidebar.divider()
-st.sidebar.caption("Performance: as bases ficam em cache por até 1 hora. Se trocar os arquivos Excel, clique abaixo.")
-if st.sidebar.button("Recarregar agora (ignorar cache)"):
+st.sidebar.caption("As bases ficam em cache por até 1 hora. Ao trocar os arquivos Excel, use o botão abaixo.")
+if st.sidebar.button("Recarregar agora (ignorar cache)", use_container_width=True):
     st.cache_data.clear()
     st.cache_resource.clear()
     st.rerun()
 
-st.divider()
-st.markdown("### Filtro de meses")
-
-meses_disponiveis_periodo = meses_no_periodo(data_ini, data_fim)
-if not meses_disponiveis_periodo:
-    meses_disponiveis_periodo = [num for num, _ in MESES]
-mes_opts = [MES_NUM_TO_NOME[m] for m in meses_disponiveis_periodo]
-mes_padrao_num = data_max.month if data_max.month in meses_disponiveis_periodo else meses_disponiveis_periodo[-1]
-mes_padrao_nome = MES_NUM_TO_NOME.get(mes_padrao_num, mes_opts[0] if mes_opts else "JAN")
-
-mes_sel_multi = st.multiselect(
-    "Selecione 1 ou mais meses",
-    options=mes_opts,
-    default=[mes_padrao_nome] if mes_padrao_nome in mes_opts else mes_opts,
-)
-
-mes_nums_sel = [MES_NOME_TO_NUM[m] for m in mes_sel_multi if m in MES_NOME_TO_NUM]
-if not mes_nums_sel:
-    mes_nums_sel = meses_disponiveis_periodo[:]
-
-mes_nums_sel = sorted(set(mes_nums_sel))
-mes_sel_label = ", ".join(MES_NUM_TO_NOME[m] for m in mes_nums_sel if m in MES_NUM_TO_NOME)
-st.markdown(f"**Meses selecionados:** {mes_sel_label}")
+st.markdown(f"**Meses selecionados:** {', '.join(MES_NUM_TO_NOME[m] for m in mes_nums_sel)}")
 
 # =========================
 # Aplica filtros (dashboard principal)
@@ -1845,9 +1840,7 @@ if df_ano1_ref is not None and not df_ano1_ref.empty:
 else:
     df_2025 = montar_df_2025_fixo(lojas_keys_aplicadas)
 
-df_2026 = df.copy()
-df_2026 = df_2026[df_2026["DATA"].notna()].copy()
-df_2026 = df_2026[df_2026["DATA"].dt.year == ANO_ATUAL].copy()
+df_2026 = df.loc[df["DATA"].notna() & (df["DATA"].dt.year == ANO_ATUAL)]
 
 if lojas_sel_aplicadas:
     df_2026 = df_2026[df_2026["LOJA_N"].isin(lojas_sel_aplicadas)].copy()
