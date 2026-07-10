@@ -1213,8 +1213,12 @@ def _calcular_calendario_comercial_mes(df_base: pd.DataFrame, ano: int, mes: int
 
     valor_col = _coluna_valor_vendas(df_base) if df_base is not None and not df_base.empty else None
     if df_base is not None and not df_base.empty and "DATA" in df_base.columns and valor_col:
-        mov = df_base[df_base["DATA"].notna()].copy()
-        mov = mov[(mov["DATA"].dt.year == ano) & (mov["DATA"].dt.month == mes)].copy()
+        mask_mov = (
+            df_base["DATA"].notna()
+            & (df_base["DATA"].dt.year == ano)
+            & (df_base["DATA"].dt.month == mes)
+        )
+        mov = df_base.loc[mask_mov, ["DATA", valor_col]].copy()
         mov[valor_col] = pd.to_numeric(mov[valor_col], errors="coerce").fillna(0.0)
         diario = (
             mov.assign(DATA_DIA=mov["DATA"].dt.normalize())
@@ -1526,13 +1530,25 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     lojas_map = df_base[["LOJA_KEY", "LOJA_N"]].drop_duplicates().groupby("LOJA_KEY")["LOJA_N"].first().to_dict()
     lojas_keys = sorted([k for k in lojas_map.keys() if k], key=_loja_ord_key)
 
-    modo = st.radio("Tipo de relatório", ["Diário", "Parcial do mês / WhatsApp por loja"], horizontal=True)
+    modo = st.radio(
+        "Tipo de relatório",
+        ["Diário", "Geral / Parcial do mês"],
+        horizontal=True,
+        key="tipo_relatorio_whatsapp",
+    )
 
     if modo == "Diário":
         data_padrao = datas_validas_rel.max().date()
         data_rel = st.date_input("Data do relatório diário", value=data_padrao, min_value=datas_validas_rel.min().date(), max_value=datas_validas_rel.max().date())
         data_rel_ts = pd.Timestamp(data_rel)
-        df_rel = df_base[df_base["DATA"].notna() & (df_base["DATA"].dt.normalize() == data_rel_ts)].copy()
+        mask_dia = df_base["DATA"].notna() & (df_base["DATA"].dt.normalize() == data_rel_ts)
+        cols_rel = [
+            c for c in [
+                "DATA", "LOJA_KEY", "LOJA_N", "FAT_LINHA", valor_col,
+                "SEGMENTO_N", "MARCA_N", "CLIENTE_N"
+            ] if c in df_base.columns
+        ]
+        df_rel = df_base.loc[mask_dia, cols_rel].copy()
         total = float(df_rel["FAT_LINHA"].sum()) if len(df_rel) else 0.0
         st.metric("Faturamento do dia", _money(total))
         st.dataframe(_linhas_dataframe(df_rel), use_container_width=True, hide_index=True)
@@ -1568,28 +1584,72 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         st.text_area("Texto geral diário", texto_full, height=360)
 
         st.subheader("Envio por loja")
-        for k, loja_nome, bloco in blocos:
-            with st.expander(loja_nome, expanded=False):
-                cols = st.columns([1, 1])
-                numero = TELEFONES_WHATSAPP_LOJAS.get(k)
-                if numero:
-                    with cols[0]:
-                        _botao_whatsapp(f"Abrir WhatsApp - {loja_nome}", numero, bloco)
-                with cols[1]:
-                    st.download_button(f"Baixar {loja_nome}.txt", bloco.encode("utf-8"), file_name=f"relatorio_diario_{k}_{data_rel.strftime('%Y%m%d')}.txt", mime="text/plain", key=f"down_daily_{k}")
-                st.text_area(f"Texto {loja_nome}", bloco, height=260, key=f"txt_daily_{k}")
+        # Renderiza apenas uma loja por vez. Criar componentes para todas as lojas em
+        # cada rerun aumenta muito o uso de memória do navegador e do Streamlit.
+        blocos_map = {k: (loja_nome, bloco) for k, loja_nome, bloco in blocos}
+        if blocos_map:
+            loja_detalhe_key = st.selectbox(
+                "Selecionar loja para visualizar/enviar",
+                options=list(blocos_map.keys()),
+                format_func=lambda k: blocos_map[k][0],
+                key="loja_detalhe_relatorio_diario",
+            )
+            loja_nome, bloco = blocos_map[loja_detalhe_key]
+            cols = st.columns([1, 1])
+            numero = TELEFONES_WHATSAPP_LOJAS.get(loja_detalhe_key)
+            if numero:
+                with cols[0]:
+                    _botao_whatsapp(f"Abrir WhatsApp - {loja_nome}", numero, bloco, key=f"wa_daily_{loja_detalhe_key}")
+            with cols[1]:
+                st.download_button(
+                    f"Baixar {loja_nome}.txt",
+                    bloco.encode("utf-8"),
+                    file_name=f"relatorio_diario_{loja_detalhe_key}_{data_rel.strftime('%Y%m%d')}.txt",
+                    mime="text/plain",
+                    key=f"down_daily_{loja_detalhe_key}",
+                )
+            st.text_area(f"Texto {loja_nome}", bloco, height=260, key=f"txt_daily_{loja_detalhe_key}")
         return
 
     # Relatório parcial/mensal
     data_max_rel = datas_validas_rel.max().date()
     mes_padrao = data_max_rel.month
     mes = st.selectbox("Mês do relatório", options=[m for m, _ in MESES], index=mes_padrao - 1, format_func=lambda m: f"{m:02d} - {MESES[m-1][1]}")
+    import calendar
     data_ini_rel = date(ANO_ATUAL, mes, 1)
-    data_fim_rel = st.date_input("Data final do relatório parcial", value=data_max_rel, min_value=data_ini_rel, max_value=data_max_rel)
-    df_rel = df_base[df_base["DATA"].notna()].copy()
+    ultimo_dia_mes = date(ANO_ATUAL, mes, calendar.monthrange(ANO_ATUAL, mes)[1])
+    data_max_mes = min(data_max_rel, ultimo_dia_mes)
+    # Se o mês selecionado ainda não existe na base, evita date_input com limites inválidos.
+    if data_max_mes < data_ini_rel:
+        st.warning("O mês selecionado ainda não possui dados disponíveis na base.")
+        return
+    chave_data_mes = f"data_fim_relatorio_{ANO_ATUAL}_{mes:02d}"
+    valor_data_mes = st.session_state.get(chave_data_mes, data_max_mes)
+    if valor_data_mes < data_ini_rel or valor_data_mes > data_max_mes:
+        valor_data_mes = data_max_mes
+        st.session_state[chave_data_mes] = valor_data_mes
+    data_fim_rel = st.date_input(
+        "Data final do relatório parcial",
+        value=valor_data_mes,
+        min_value=data_ini_rel,
+        max_value=data_max_mes,
+        key=chave_data_mes,
+    )
     data_ini_rel_ts = pd.Timestamp(data_ini_rel)
     data_fim_rel_ts = pd.Timestamp(data_fim_rel) + pd.Timedelta(days=1)
-    df_rel = df_rel[(df_rel["DATA"].dt.year == ANO_ATUAL) & (df_rel["DATA"].dt.month == mes) & (df_rel["DATA"] >= data_ini_rel_ts) & (df_rel["DATA"] < data_fim_rel_ts)].copy()
+    mask_rel = (
+        df_base["DATA"].notna()
+        & (df_base["DATA"] >= data_ini_rel_ts)
+        & (df_base["DATA"] < data_fim_rel_ts)
+    )
+    # Seleciona somente as colunas necessárias. Evita copiar a base inteira ao trocar o filtro.
+    cols_rel = [
+        c for c in [
+            "DATA", "LOJA_KEY", "LOJA_N", "FAT_LINHA", valor_col,
+            "SEGMENTO_N", "MARCA_N", "CLIENTE_N"
+        ] if c in df_base.columns
+    ]
+    df_rel = df_base.loc[mask_rel, cols_rel].copy()
     mes_fechado = _mes_esta_fechado(df_base, ANO_ATUAL, mes, data_fim_rel)
 
     metas, ano1, dias_uteis_mes_ref = _referencias_mes(lojas_keys, mes)
@@ -1705,16 +1765,39 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     st.text_area("Texto geral mensal", texto_full, height=360)
 
     st.subheader("Envio por loja")
-    for k, loja_nome, bloco in blocos:
-        with st.expander(loja_nome, expanded=False):
-            cols = st.columns([1, 1])
-            numero = TELEFONES_WHATSAPP_LOJAS.get(k)
-            if numero:
-                with cols[0]:
-                    _botao_whatsapp(f"Abrir WhatsApp - {loja_nome}", numero, bloco)
-            with cols[1]:
-                st.download_button(f"Baixar {loja_nome}.txt", bloco.encode("utf-8"), file_name=f"relatorio_mensal_{k}_{ANO_ATUAL}_{mes:02d}.txt", mime="text/plain", key=f"down_month_{k}")
-            st.text_area(f"Texto {loja_nome}", bloco, height=260, key=f"txt_month_{k}")
+    blocos_map = {k: (loja_nome, bloco) for k, loja_nome, bloco in blocos}
+    if blocos_map:
+        loja_detalhe_key = st.selectbox(
+            "Selecionar loja para visualizar/enviar",
+            options=list(blocos_map.keys()),
+            format_func=lambda k: blocos_map[k][0],
+            key="loja_detalhe_relatorio_mensal",
+        )
+        loja_nome, bloco = blocos_map[loja_detalhe_key]
+        cols = st.columns([1, 1])
+        numero = TELEFONES_WHATSAPP_LOJAS.get(loja_detalhe_key)
+        if numero:
+            with cols[0]:
+                _botao_whatsapp(
+                    f"Abrir WhatsApp - {loja_nome}",
+                    numero,
+                    bloco,
+                    key=f"wa_month_{loja_detalhe_key}_{mes:02d}",
+                )
+        with cols[1]:
+            st.download_button(
+                f"Baixar {loja_nome}.txt",
+                bloco.encode("utf-8"),
+                file_name=f"relatorio_mensal_{loja_detalhe_key}_{ANO_ATUAL}_{mes:02d}.txt",
+                mime="text/plain",
+                key=f"down_month_{loja_detalhe_key}_{mes:02d}",
+            )
+        st.text_area(
+            f"Texto {loja_nome}",
+            bloco,
+            height=260,
+            key=f"txt_month_{loja_detalhe_key}_{mes:02d}",
+        )
 
 
 # =========================
