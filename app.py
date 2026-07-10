@@ -516,6 +516,22 @@ MESES = [
     (12, "DEZ"),
 ]
 
+MES_NOME_TO_NUM = {nome: num for num, nome in MESES}
+MES_NUM_TO_NOME = {num: nome for num, nome in MESES}
+
+
+def meses_no_periodo(data_ini_val, data_fim_val) -> list[int]:
+    """Meses existentes no intervalo de datas selecionado."""
+    try:
+        ini = pd.Timestamp(data_ini_val).to_period("M")
+        fim = pd.Timestamp(data_fim_val).to_period("M")
+        if fim < ini:
+            ini, fim = fim, ini
+        meses = [int(p.month) for p in pd.period_range(ini, fim, freq="M")]
+        return [m for m in range(1, 13) if m in set(meses)]
+    except Exception:
+        return [num for num, _ in MESES]
+
 # Ordem desejada (UNAÍ por último)
 LOJA_KEY_ORDER = ["ADE", "GAMA", "SOFNORTE", "CEILANDIA", "SIA", "AGLINDAS", "GUARA", "LUZIANIA", "UNAI"]
 LOJA_KEY_RANK = {k: i for i, k in enumerate(LOJA_KEY_ORDER)}
@@ -1767,6 +1783,30 @@ if st.sidebar.button("Recarregar agora (ignorar cache)"):
     st.cache_resource.clear()
     st.rerun()
 
+st.divider()
+st.markdown("### Filtro de meses")
+
+meses_disponiveis_periodo = meses_no_periodo(data_ini, data_fim)
+if not meses_disponiveis_periodo:
+    meses_disponiveis_periodo = [num for num, _ in MESES]
+mes_opts = [MES_NUM_TO_NOME[m] for m in meses_disponiveis_periodo]
+mes_padrao_num = data_max.month if data_max.month in meses_disponiveis_periodo else meses_disponiveis_periodo[-1]
+mes_padrao_nome = MES_NUM_TO_NOME.get(mes_padrao_num, mes_opts[0] if mes_opts else "JAN")
+
+mes_sel_multi = st.multiselect(
+    "Selecione 1 ou mais meses",
+    options=mes_opts,
+    default=[mes_padrao_nome] if mes_padrao_nome in mes_opts else mes_opts,
+)
+
+mes_nums_sel = [MES_NOME_TO_NUM[m] for m in mes_sel_multi if m in MES_NOME_TO_NUM]
+if not mes_nums_sel:
+    mes_nums_sel = meses_disponiveis_periodo[:]
+
+mes_nums_sel = sorted(set(mes_nums_sel))
+mes_sel_label = ", ".join(MES_NUM_TO_NOME[m] for m in mes_nums_sel if m in MES_NUM_TO_NOME)
+st.markdown(f"**Meses selecionados:** {mes_sel_label}")
+
 # =========================
 # Aplica filtros (dashboard principal)
 # =========================
@@ -1786,29 +1826,9 @@ df_f = df_f[df_f["DATA"].notna()]
 data_ini_ts = pd.Timestamp(data_ini)
 data_fim_exclusivo_ts = pd.Timestamp(data_fim) + pd.Timedelta(days=1)
 df_f = df_f[(df_f["DATA"] >= data_ini_ts) & (df_f["DATA"] < data_fim_exclusivo_ts)]
+df_f = df_f[df_f["DATA"].dt.month.isin(mes_nums_sel)].copy()
 
 fat_total = float(df_f["FAT_LINHA"].sum()) if len(df_f) else 0.0
-
-st.divider()
-
-# =========================
-# Seleção de meses (multi)
-# =========================
-st.markdown("### Seleção de meses (para análise e tabelas)")
-mes_opts = [nome for _, nome in MESES]
-mes_sel_multi = st.multiselect(
-    "Selecione 1 ou mais meses",
-    options=mes_opts,
-    default=[mes_opts[0]],
-)
-
-mes_nome_to_num = {nome: num for num, nome in MESES}
-mes_nums_sel = [mes_nome_to_num[m] for m in mes_sel_multi if m in mes_nome_to_num]
-if not mes_nums_sel:
-    mes_nums_sel = [num for num, _ in MESES]
-
-mes_sel_label = ", ".join([m for m in mes_opts if mes_nome_to_num[m] in mes_nums_sel])
-st.markdown(f"**Meses selecionados:** {mes_sel_label}")
 
 # ============================================================
 # Comparativo: 2025 (fixo) x 2026 (Excel)
@@ -3287,7 +3307,7 @@ def _indicador_style(v):
 
 
 def _calc_indicador_compras_por_loja(df_f: pd.DataFrame, df_compras: pd.DataFrame, df_devol: pd.DataFrame,
-                                    lojas_sel_aplicadas, data_ini, data_fim) -> pd.DataFrame:
+                                    lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None) -> pd.DataFrame:
     # ===== Base (Vendas) por loja: FATURAMENTO + CMV (coluna T -> CUSTO_T_NUM)
     if df_f is None or df_f.empty:
         base = pd.DataFrame({"LOJA": [], "FATURAMENTO": [], "CMV": []})
@@ -3311,6 +3331,8 @@ def _calc_indicador_compras_por_loja(df_f: pd.DataFrame, df_compras: pd.DataFram
         if "DATA" in out.columns and out["DATA"].notna().any():
             out = out[out["DATA"].notna()]
             out = out[(out["DATA"] >= pd.Timestamp(data_ini)) & (out["DATA"] < (pd.Timestamp(data_fim) + pd.Timedelta(days=1)))]
+            if mes_nums_sel:
+                out = out[out["DATA"].dt.month.isin(mes_nums_sel)]
         return out
 
     comp_f = _aplicar_recorte_mov(df_compras)
@@ -3388,7 +3410,7 @@ def _calc_indicador_compras_por_loja(df_f: pd.DataFrame, df_compras: pd.DataFram
     return out
 
 
-def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, data_ini, data_fim):
+def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None):
     # Drill (expander) + computação sob demanda para não pesar a abertura do dashboard
     with st.expander("Abrir Indicador de Compras", expanded=False):
         st.caption("Tabela por loja (com TOTAL ao final), usando o mesmo recorte de lojas e período do dashboard.")
@@ -3398,7 +3420,7 @@ def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, dat
             return
 
         df_compras, df_devol = carregar_movimentacoes_compras()
-        tbl = _calc_indicador_compras_por_loja(df_f, df_compras, df_devol, lojas_sel_aplicadas, data_ini, data_fim)
+        tbl = _calc_indicador_compras_por_loja(df_f, df_compras, df_devol, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
 
         sty = (
             tbl.style
@@ -3423,4 +3445,4 @@ def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, dat
 
 
 # Render no final do dashboard
-_render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim)
+_render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
