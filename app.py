@@ -2366,6 +2366,153 @@ with st.expander("Abrir Tabela Previsão de Fechamento"):
 
     st.dataframe(prev_view_fmt, use_container_width=True, hide_index=True, height=520)
 
+    # ------------------------------------------------------------
+    # Vendas Diárias por Loja — visão geral + drill por loja
+    # Baseado no mesmo recorte/filtros ativos do dashboard.
+    # ------------------------------------------------------------
+    st.markdown("### Vendas Diárias por Loja")
+    st.caption("Visão diária semelhante ao relatório do ERP, com uma matriz por loja e um drill individual por unidade.")
+
+    vendas_dia_base = df_f.copy()
+    vendas_dia_base = vendas_dia_base[vendas_dia_base["DATA"].notna()].copy()
+
+    if vendas_dia_base.empty:
+        st.info("Não há vendas no período/filtros selecionados para montar o relatório diário.")
+    else:
+        vendas_dia_base["DATA_DIA"] = vendas_dia_base["DATA"].dt.normalize()
+        vendas_dia_base["VALOR_DIA"] = pd.to_numeric(vendas_dia_base[VAL_COL], errors="coerce").fillna(0.0)
+
+        diario_loja = (
+            vendas_dia_base.groupby(["DATA_DIA", "LOJA_KEY"], dropna=False)["VALOR_DIA"]
+            .sum()
+            .reset_index()
+        )
+
+        # Mantém somente dias em que houve movimento positivo na empresa, como no relatório do ERP.
+        totais_dia_empresa = diario_loja.groupby("DATA_DIA")["VALOR_DIA"].sum()
+        dias_com_movimento = totais_dia_empresa[totais_dia_empresa > 0].index
+        diario_loja = diario_loja[diario_loja["DATA_DIA"].isin(dias_com_movimento)].copy()
+
+        if diario_loja.empty:
+            st.info("Não há dias com faturamento positivo no recorte selecionado.")
+        else:
+            lojas_diarias = sorted(
+                diario_loja["LOJA_KEY"].dropna().astype(str).unique().tolist(),
+                key=lambda k: (LOJA_KEY_RANK.get(k, DEFAULT_RANK), str(map_key_to_loja.get(k, k))),
+            )
+
+            nome_loja_diaria = {k: str(map_key_to_loja.get(k, k)) for k in lojas_diarias}
+
+            aba_geral, aba_drill = st.tabs(["Visão geral", "Drill por loja"])
+
+            with aba_geral:
+                matriz = diario_loja.pivot_table(
+                    index="DATA_DIA",
+                    columns="LOJA_KEY",
+                    values="VALOR_DIA",
+                    aggfunc="sum",
+                    fill_value=0.0,
+                )
+                matriz = matriz.reindex(columns=lojas_diarias, fill_value=0.0).sort_index()
+                matriz = matriz.rename(columns=nome_loja_diaria)
+                matriz["TOTAL"] = matriz.sum(axis=1)
+
+                matriz_view = matriz.reset_index().rename(columns={"DATA_DIA": "DATA"})
+                matriz_view["DATA"] = pd.to_datetime(matriz_view["DATA"]).dt.strftime("%d/%m/%Y")
+
+                linha_total = {"DATA": "TOTAIS"}
+                for col in matriz.columns:
+                    linha_total[col] = float(matriz[col].sum())
+                matriz_view = pd.concat([matriz_view, pd.DataFrame([linha_total])], ignore_index=True)
+
+                cols_valor_diario = [c for c in matriz_view.columns if c != "DATA"]
+                sty_diario = (
+                    matriz_view.style
+                    .apply(
+                        lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
+                        if str(row.get("DATA", "")).upper() == "TOTAIS"
+                        else ["" if row.name % 2 == 0 else "background-color: #f8fafc;"] * len(row),
+                        axis=1,
+                    )
+                    .format({c: lambda v: "R$ " + format_brl(v) for c in cols_valor_diario})
+                )
+                st.dataframe(sty_diario, use_container_width=True, hide_index=True, height=420)
+
+                total_periodo_diario = float(matriz["TOTAL"].sum())
+                qtd_dias_diario = int(len(matriz))
+                media_empresa_diaria = (total_periodo_diario / qtd_dias_diario) if qtd_dias_diario else 0.0
+                d1, d2, d3 = st.columns(3)
+                d1.metric("Total do período", "R$ " + format_brl(total_periodo_diario))
+                d2.metric("Dias com movimento", str(qtd_dias_diario))
+                d3.metric("Média diária", "R$ " + format_brl(media_empresa_diaria))
+
+            with aba_drill:
+                opcoes_loja = [nome_loja_diaria[k] for k in lojas_diarias]
+                nome_para_key = {nome_loja_diaria[k]: k for k in lojas_diarias}
+                loja_escolhida_nome = st.selectbox(
+                    "Selecione a loja",
+                    options=opcoes_loja,
+                    key="drill_vendas_diarias_loja",
+                )
+                loja_escolhida_key = nome_para_key[loja_escolhida_nome]
+
+                drill = diario_loja[diario_loja["LOJA_KEY"] == loja_escolhida_key].copy()
+                drill = (
+                    drill.groupby("DATA_DIA", dropna=False)["VALOR_DIA"]
+                    .sum()
+                    .reset_index()
+                    .sort_values("DATA_DIA")
+                )
+
+                # Completa os mesmos dias com movimento da empresa para enxergar dias zerados da loja.
+                calendario_drill = pd.DataFrame({"DATA_DIA": sorted(dias_com_movimento)})
+                drill = calendario_drill.merge(drill, on="DATA_DIA", how="left")
+                drill["VALOR_DIA"] = drill["VALOR_DIA"].fillna(0.0)
+
+                total_loja_diario = float(drill["VALOR_DIA"].sum())
+                dias_empresa = int(len(drill))
+                media_loja_diaria = (total_loja_diario / dias_empresa) if dias_empresa else 0.0
+                melhor_dia_val = float(drill["VALOR_DIA"].max()) if len(drill) else 0.0
+                melhor_dia_data = drill.loc[drill["VALOR_DIA"].idxmax(), "DATA_DIA"] if len(drill) else None
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total faturado", "R$ " + format_brl(total_loja_diario))
+                c2.metric("Média diária", "R$ " + format_brl(media_loja_diaria))
+                c3.metric("Dias do relatório", str(dias_empresa))
+                c4.metric(
+                    "Melhor dia",
+                    "R$ " + format_brl(melhor_dia_val),
+                    pd.Timestamp(melhor_dia_data).strftime("%d/%m/%Y") if melhor_dia_data is not None else None,
+                )
+
+                drill_view = drill.rename(columns={"DATA_DIA": "DATA", "VALOR_DIA": "VENDAS_R$"}).copy()
+                drill_view["DATA"] = pd.to_datetime(drill_view["DATA"]).dt.strftime("%d/%m/%Y")
+                drill_view["% DO TOTAL"] = drill_view["VENDAS_R$"].apply(
+                    lambda v: (v / total_loja_diario * 100) if total_loja_diario else 0.0
+                )
+
+                linha_total_drill = pd.DataFrame([{
+                    "DATA": "TOTAIS",
+                    "VENDAS_R$": total_loja_diario,
+                    "% DO TOTAL": 100.0 if total_loja_diario else 0.0,
+                }])
+                drill_view = pd.concat([drill_view, linha_total_drill], ignore_index=True)
+
+                sty_drill = (
+                    drill_view.style
+                    .apply(
+                        lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
+                        if str(row.get("DATA", "")).upper() == "TOTAIS"
+                        else ["" if row.name % 2 == 0 else "background-color: #f8fafc;"] * len(row),
+                        axis=1,
+                    )
+                    .format({
+                        "VENDAS_R$": lambda v: "R$ " + format_brl(v),
+                        "% DO TOTAL": lambda v: f"{float(v):.2f}%".replace(".", ","),
+                    })
+                )
+                st.dataframe(sty_drill, use_container_width=True, hide_index=True, height=420)
+
 # ------------------------------------------------------------
 # Gráfico 2025 x 2026
 # ------------------------------------------------------------
