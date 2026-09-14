@@ -1836,9 +1836,45 @@ CAMPANHA_LOJA_NOMES = {
 }
 
 
-def _eh_segmento_decor_industrial(valor) -> bool:
-    chave = canonical_key(valor)
-    return ("DECOR" in chave) or ("INDUSTR" in chave)
+def classificar_segmento_gerencial(seg):
+    """Classificação oficial usada no drill Faturamento por Loja x Segmento Gerencial."""
+    key = canonical_key(seg)
+
+    if key in {"", "SEMSEGMENTO", "NAN", "NONE"}:
+        return "Sem Segmento"
+
+    # Decor/Industrial gerencial = Imobiliário + Decorativo + Industrial + Moveleira.
+    # A checagem vem antes de Automotivo para tratar cadastros híbridos com Moveleira.
+    if (
+        "IMOBILI" in key
+        or "DECOR" in key
+        or "INDUSTR" in key
+        or "MOVELEIR" in key
+        or "MOVEL" in key
+    ):
+        return "Decor/Industrial"
+
+    if "THINNER" in key or "TINER" in key:
+        return "Thinner"
+
+    if "AUTOMOT" in key:
+        return "Automotivo"
+
+    return "Outros Segmentos"
+
+
+def _mask_decor_industrial_campanha(df: pd.DataFrame) -> pd.Series:
+    """Usa exatamente a mesma regra do Segmento Gerencial do dashboard.
+
+    Para o Super Setembro, entram Imobiliário/Decorativo, Industrial e Moveleira,
+    conforme a classificação de SEGMENTO_N exibida no drill
+    "Faturamento por Loja x Segmento Gerencial".
+    """
+    if df is None or df.empty:
+        return pd.Series(False, index=getattr(df, "index", None), dtype=bool)
+    if "SEGMENTO_N" not in df.columns:
+        return pd.Series(False, index=df.index, dtype=bool)
+    return df["SEGMENTO_N"].apply(classificar_segmento_gerencial).eq("Decor/Industrial")
 
 
 def _status_campanha(cfg: dict) -> tuple[str, str]:
@@ -1885,7 +1921,7 @@ def _montar_texto_whatsapp_super_setembro(
         linhas.append(f"Falta: *R$ {format_brl(falta_desbloqueio)}*")
         linhas.append("Status: 🔒 *Premiações ainda bloqueadas*")
 
-    linhas += ["", "*👔 GERENTES | Decorativo + Industrial Q3*"]
+    linhas += ["", "*👔 GERENTES | Decor/Industrial gerencial Q3*"]
     for _, r in tabela_gerentes.iterrows():
         loja = str(r["LOJA"])
         realizado = float(r["REALIZADO"])
@@ -1930,7 +1966,7 @@ def _montar_texto_whatsapp_super_setembro(
 
     linhas += [
         "",
-        "_Premiações somente são liberadas após o atingimento coletivo de R$ 525.000,00 em Decorativo + Industrial nas cinco lojas da campanha._",
+        "_Premiações somente são liberadas após o atingimento coletivo de R$ 525.000,00 no segmento gerencial Decor/Industrial (Imobiliário/Decorativo + Industrial + Moveleira) nas cinco lojas da campanha._",
     ]
     return "\n".join(linhas)
 
@@ -1983,7 +2019,7 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
         <div class="section-card">
             <div style="font-size:12px;font-weight:800;color:#b45309;letter-spacing:.08em;">CAMPANHA DE INCENTIVO | Q3 2026</div>
             <div style="font-size:28px;font-weight:900;color:#0f172a;margin-top:4px;">SUPER SETEMBRO</div>
-            <div style="color:#475569;margin-top:4px;">A arrancada final para fecharmos o Q3 com força nos segmentos Decorativo e Industrial.</div>
+            <div style="color:#475569;margin-top:4px;">A arrancada final para fecharmos o Q3 com força nos segmentos Decorativo, Industrial e Moveleira.</div>
             <div style="margin-top:12px;font-weight:800;">{status_emoji} {status_nome}</div>
         </div>
         """,
@@ -2000,7 +2036,9 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
 
     st.caption(
         "Base da campanha: Q3 completo (01/07/2026 a 30/09/2026), "
-        "independentemente dos filtros do Dashboard."
+        "independentemente dos filtros do Dashboard. O resultado usa exatamente o mesmo "
+        "Segmento Gerencial do drill Faturamento por Loja x Segmento Gerencial: "
+        "Imobiliário/Decorativo + Industrial + Moveleira."
     )
 
     if not df_c.empty:
@@ -2009,8 +2047,10 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
     else:
         data_referencia = min(date.today(), cfg["fim"])
 
-    # Decorativo + Industrial: base da condição coletiva e campanha dos gerentes.
-    mask_di = df_c["SEGMENTO_N"].apply(_eh_segmento_decor_industrial)
+    # Decor/Industrial gerencial: base da condição coletiva e campanha dos gerentes.
+    # Mesma regra do drill Faturamento por Loja x Segmento Gerencial:
+    # Imobiliário/Decorativo + Industrial + Moveleira, usando SEGMENTO_N.
+    mask_di = _mask_decor_industrial_campanha(df_c)
     df_di = df_c[mask_di].copy()
     realizado_desbloqueio = float(df_di["FAT_LINHA"].sum()) if len(df_di) else 0.0
     desbloqueado = realizado_desbloqueio >= cfg["meta_desbloqueio"]
@@ -2019,7 +2059,7 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
 
     st.markdown("### Condição para desbloqueio")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Realizado D+I", "R$ " + format_brl(realizado_desbloqueio))
+    c1.metric("Realizado Decor/Industrial", "R$ " + format_brl(realizado_desbloqueio))
     c2.metric("Meta coletiva", "R$ " + format_brl(cfg["meta_desbloqueio"]))
     c3.metric("Atingimento", _fmt_pct_campanha(pct_desbloqueio))
     c4.metric("Saldo", "R$ " + format_brl(falta_desbloqueio))
@@ -2031,12 +2071,26 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
 
     # -------------------- Gerentes --------------------
     st.markdown("### Campanha 1 | Gerentes")
-    st.caption("Meta acumulada de Decorativo + Industrial por loja no Q3. Ao atingir a meta, o gerente recebe 0,5% sobre todo o faturamento D+I da loja no trimestre, condicionado ao desbloqueio geral.")
+    st.caption("Meta acumulada do segmento gerencial Decor/Industrial (Imobiliário/Decorativo + Industrial + Moveleira) por loja no Q3. Ao atingir a meta, o gerente recebe 0,5% sobre todo esse faturamento da loja no trimestre, condicionado ao desbloqueio geral.")
 
-    realizado_loja = df_di.groupby("LOJA_KEY")["FAT_LINHA"].sum().to_dict() if len(df_di) else {}
+    # Consolidação explícita mês a mês. Isso impede que qualquer seleção de mês do
+    # dashboard interfira no Q3 e também deixa visível a composição do acumulado.
+    if len(df_di):
+        df_di["MES_CAMPANHA"] = pd.to_datetime(df_di["DATA"], errors="coerce").dt.month
+        realizado_loja_mes = (
+            df_di.groupby(["LOJA_KEY", "MES_CAMPANHA"], dropna=False)["FAT_LINHA"]
+            .sum()
+            .to_dict()
+        )
+    else:
+        realizado_loja_mes = {}
+
     rows_g = []
     for loja_key, meta in cfg["metas_gerentes"].items():
-        realizado = float(realizado_loja.get(loja_key, 0.0) or 0.0)
+        julho = float(realizado_loja_mes.get((loja_key, 7), 0.0) or 0.0)
+        agosto = float(realizado_loja_mes.get((loja_key, 8), 0.0) or 0.0)
+        setembro = float(realizado_loja_mes.get((loja_key, 9), 0.0) or 0.0)
+        realizado = julho + agosto + setembro
         ating = (realizado / meta * 100.0) if meta else 0.0
         falta = max(meta - realizado, 0.0)
         bateu = realizado >= meta
@@ -2049,6 +2103,9 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
             status_premio = "—"
         rows_g.append({
             "LOJA": CAMPANHA_LOJA_NOMES.get(loja_key, loja_key),
+            "JULHO": julho,
+            "AGOSTO": agosto,
+            "SETEMBRO": setembro,
             "META": meta,
             "REALIZADO": realizado,
             "ATINGIMENTO": ating,
@@ -2059,6 +2116,9 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
         })
     tbl_g = pd.DataFrame(rows_g)
     tbl_g_disp = tbl_g.copy()
+    tbl_g_disp["Julho"] = tbl_g_disp["JULHO"].apply(lambda v: "R$ " + format_brl(v))
+    tbl_g_disp["Agosto"] = tbl_g_disp["AGOSTO"].apply(lambda v: "R$ " + format_brl(v))
+    tbl_g_disp["Setembro"] = tbl_g_disp["SETEMBRO"].apply(lambda v: "R$ " + format_brl(v))
     tbl_g_disp["Meta Q3"] = tbl_g_disp["META"].apply(lambda v: "R$ " + format_brl(v))
     tbl_g_disp["Realizado Q3"] = tbl_g_disp["REALIZADO"].apply(lambda v: "R$ " + format_brl(v))
     tbl_g_disp["Atingimento"] = tbl_g_disp["ATINGIMENTO"].apply(_fmt_pct_campanha)
@@ -2067,7 +2127,7 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
     tbl_g_disp["Prêmio calculado"] = tbl_g_disp["PREMIO_CALCULADO"].apply(lambda v: "R$ " + format_brl(v) if v > 0 else "—")
     tbl_g_disp["Status prêmio"] = tbl_g_disp["STATUS_PREMIO"]
     st.dataframe(
-        tbl_g_disp[["LOJA", "Meta Q3", "Realizado Q3", "Atingimento", "Falta", "Situação", "Prêmio calculado", "Status prêmio"]].rename(columns={"LOJA": "Loja"}),
+        tbl_g_disp[["LOJA", "Julho", "Agosto", "Setembro", "Meta Q3", "Realizado Q3", "Atingimento", "Falta", "Situação", "Prêmio calculado", "Status prêmio"]].rename(columns={"LOJA": "Loja"}),
         use_container_width=True,
         hide_index=True,
     )
@@ -3246,37 +3306,6 @@ with col4:
     # ------------------------------------------------------------
     with st.expander("Abrir drill: Faturamento por Loja x Segmento Gerencial"):
         st.markdown("#### Faturamento por Loja x Segmento Gerencial")
-
-        def classificar_segmento_gerencial(seg):
-            key = canonical_key(seg)
-
-            if key in {"", "SEMSEGMENTO", "NAN", "NONE"}:
-                return "Sem Segmento"
-
-            # Regra gerencial:
-            # - Automotivo deve ser apenas Automotivo.
-            # - Decor/Industrial soma Imobiliário, Industrial e Moveleira.
-            #
-            # Importante: esta verificação vem ANTES de Automotivo para corrigir
-            # casos em que o cadastro venha como "Automotivo / Moveleira" ou
-            # contenha a palavra Moveleira junto de Automotivo. Nesses casos,
-            # deve entrar em Decor/Industrial, não em Automotivo.
-            if (
-                "IMOBILI" in key
-                or "DECOR" in key
-                or "INDUSTR" in key
-                or "MOVELEIR" in key
-                or "MOVEL" in key
-            ):
-                return "Decor/Industrial"
-
-            if "THINNER" in key or "TINER" in key:
-                return "Thinner"
-
-            if "AUTOMOT" in key:
-                return "Automotivo"
-
-            return "Outros Segmentos"
 
         df_seg_loja = df_f.copy()
         df_seg_loja["SEGMENTO_GERENCIAL"] = df_seg_loja["SEGMENTO_N"].apply(classificar_segmento_gerencial)
