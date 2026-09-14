@@ -1800,6 +1800,352 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         )
 
 
+# =========================================================
+# CAMPANHAS
+# =========================================================
+# Para cadastrar/alterar campanhas futuras, centralize as regras neste bloco
+# e crie/ajuste a respectiva função de renderização.
+CAMPANHAS = {
+    "SUPER_SETEMBRO_2026": {
+        "nome": "Super Setembro",
+        "inicio": date(2026, 7, 1),
+        "fim": date(2026, 9, 30),
+        "lojas": ["ADE", "GAMA", "SOFNORTE", "CEILANDIA", "LUZIANIA"],
+        "meta_desbloqueio": 525000.00,
+        "metas_gerentes": {
+            "ADE": 75000.00,
+            "GAMA": 75000.00,
+            "SOFNORTE": 45000.00,
+            "CEILANDIA": 105000.00,
+            "LUZIANIA": 300000.00,
+        },
+        "premio_gerente_pct": 0.005,
+        "marca_vendedores": "CORAL",
+        "meta_vendedor": 35000.00,
+        "premio_vendedor_pct": 0.01,
+    }
+}
+
+
+CAMPANHA_LOJA_NOMES = {
+    "ADE": "ADE",
+    "GAMA": "Gama",
+    "SOFNORTE": "Sofnorte",
+    "CEILANDIA": "Ceilândia",
+    "LUZIANIA": "Luziânia",
+}
+
+
+def _eh_segmento_decor_industrial(valor) -> bool:
+    chave = canonical_key(valor)
+    return ("DECOR" in chave) or ("INDUSTR" in chave)
+
+
+def _status_campanha(cfg: dict) -> tuple[str, str]:
+    hoje = date.today()
+    if hoje < cfg["inicio"]:
+        return "AGUARDANDO INÍCIO", "⚪"
+    if hoje <= cfg["fim"]:
+        return "EM ANDAMENTO", "🟠"
+    return "FINALIZADA", "🟢"
+
+
+def _fmt_pct_campanha(v: float) -> str:
+    try:
+        return f"{float(v):.1f}%".replace(".", ",")
+    except Exception:
+        return "—"
+
+
+def _montar_texto_whatsapp_super_setembro(
+    cfg: dict,
+    status_nome: str,
+    data_referencia: date,
+    desbloqueado: bool,
+    realizado_desbloqueio: float,
+    tabela_gerentes: pd.DataFrame,
+    tabela_vendedores: pd.DataFrame,
+) -> str:
+    titulo_resultado = "RESULTADO FINAL" if status_nome == "FINALIZADA" else "RESULTADO PARCIAL"
+    falta_desbloqueio = max(cfg["meta_desbloqueio"] - realizado_desbloqueio, 0.0)
+    pct_desbloqueio = (realizado_desbloqueio / cfg["meta_desbloqueio"] * 100.0) if cfg["meta_desbloqueio"] else 0.0
+
+    linhas = [
+        f"🚀 *SUPER SETEMBRO | {titulo_resultado}*",
+        f"📅 Dados até {data_referencia.strftime('%d/%m/%Y')}",
+        "",
+        "*🔓 DESBLOQUEIO GERAL*",
+        f"Realizado: *R$ {format_brl(realizado_desbloqueio)}*",
+        f"Meta: *R$ {format_brl(cfg['meta_desbloqueio'])}*",
+        f"Atingimento: *{_fmt_pct_campanha(pct_desbloqueio)}*",
+    ]
+    if desbloqueado:
+        linhas.append("Status: ✅ *Campanha desbloqueada*")
+    else:
+        linhas.append(f"Falta: *R$ {format_brl(falta_desbloqueio)}*")
+        linhas.append("Status: 🔒 *Premiações ainda bloqueadas*")
+
+    linhas += ["", "*👔 GERENTES | Decorativo + Industrial Q3*"]
+    for _, r in tabela_gerentes.iterrows():
+        loja = str(r["LOJA"])
+        realizado = float(r["REALIZADO"])
+        meta = float(r["META"])
+        pct = float(r["ATINGIMENTO"])
+        falta = max(meta - realizado, 0.0)
+        bateu = bool(r["META_ATINGIDA"])
+        premio = float(r["PREMIO_CALCULADO"])
+        status_meta = "✅ Meta atingida" if bateu else f"⏳ Falta R$ {format_brl(falta)}"
+        linhas.append(
+            f"• *{loja}*: R$ {format_brl(realizado)} / R$ {format_brl(meta)} "
+            f"({_fmt_pct_campanha(pct)}) — {status_meta}"
+        )
+        if bateu:
+            if desbloqueado:
+                linhas.append(f"  Premiação: *R$ {format_brl(premio)}* ✅")
+            else:
+                linhas.append(f"  Prêmio calculado: *R$ {format_brl(premio)}* — aguardando desbloqueio geral")
+
+    linhas += ["", "*🎯 VENDEDORES | Coral Q3*", f"Meta individual: *R$ {format_brl(cfg['meta_vendedor'])}*"]
+    if tabela_vendedores.empty:
+        linhas.append("Sem vendas Coral registradas nas cinco lojas da campanha.")
+    else:
+        for _, r in tabela_vendedores.iterrows():
+            nome = str(r["VENDEDOR"])
+            loja = str(r["LOJA"])
+            realizado = float(r["REALIZADO"])
+            pct = float(r["ATINGIMENTO"])
+            falta = max(cfg["meta_vendedor"] - realizado, 0.0)
+            bateu = bool(r["META_ATINGIDA"])
+            premio = float(r["PREMIO_CALCULADO"])
+            status_meta = "✅ Meta atingida" if bateu else f"⏳ Falta R$ {format_brl(falta)}"
+            linhas.append(
+                f"• *{nome}* ({loja}): R$ {format_brl(realizado)} "
+                f"({_fmt_pct_campanha(pct)}) — {status_meta}"
+            )
+            if bateu:
+                if desbloqueado:
+                    linhas.append(f"  Premiação: *R$ {format_brl(premio)}* ✅")
+                else:
+                    linhas.append(f"  Prêmio calculado: *R$ {format_brl(premio)}* — aguardando desbloqueio geral")
+
+    linhas += [
+        "",
+        "_Premiações somente são liberadas após o atingimento coletivo de R$ 525.000,00 em Decorativo + Industrial nas cinco lojas da campanha._",
+    ]
+    return "\n".join(linhas)
+
+
+def _botao_copiar_texto_campanha(texto: str, key: str = "copiar_campanha"):
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", str(key))
+    texto_js = json.dumps(str(texto or ""), ensure_ascii=False)
+    st.components.v1.html(
+        f"""
+        <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+            <button id="btn_{safe_id}" style="
+                width: 100%; border: 0; border-radius: 14px; padding: 13px 16px;
+                background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+                color: #fff; font-weight: 800; font-size: 15px; cursor: pointer;
+                box-shadow: 0 8px 20px rgba(22,163,74,.22);">
+                📋 Copiar texto para WhatsApp
+            </button>
+            <div id="status_{safe_id}" style="margin-top:8px;color:#334155;font-size:12px;"></div>
+        </div>
+        <script>
+        const texto_{safe_id} = {texto_js};
+        document.getElementById('btn_{safe_id}').addEventListener('click', async function() {{
+            const status = document.getElementById('status_{safe_id}');
+            try {{
+                await navigator.clipboard.writeText(texto_{safe_id});
+                status.innerHTML = '✅ Texto copiado. Agora é só colar no WhatsApp.';
+            }} catch (e) {{
+                status.innerHTML = '⚠️ O navegador bloqueou a cópia automática. Use o campo de texto abaixo.';
+            }}
+        }});
+        </script>
+        """,
+        height=82,
+    )
+
+
+def render_super_setembro(df_base: pd.DataFrame):
+    cfg = CAMPANHAS["SUPER_SETEMBRO_2026"]
+    status_nome, status_emoji = _status_campanha(cfg)
+
+    st.markdown("## 🏆 Campanhas")
+    st.markdown(
+        f"""
+        <div class="section-card">
+            <div style="font-size:12px;font-weight:800;color:#b45309;letter-spacing:.08em;">CAMPANHA DE INCENTIVO | Q3 2026</div>
+            <div style="font-size:28px;font-weight:900;color:#0f172a;margin-top:4px;">SUPER SETEMBRO</div>
+            <div style="color:#475569;margin-top:4px;">A arrancada final para fecharmos o Q3 com força nos segmentos Decorativo e Industrial.</div>
+            <div style="margin-top:12px;font-weight:800;">{status_emoji} {status_nome}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    df_c = df_base.copy()
+    df_c = df_c[df_c["DATA"].notna()].copy()
+    ini_ts = pd.Timestamp(cfg["inicio"])
+    fim_exclusivo = pd.Timestamp(cfg["fim"]) + pd.Timedelta(days=1)
+    df_c = df_c[(df_c["DATA"] >= ini_ts) & (df_c["DATA"] < fim_exclusivo)].copy()
+    df_c = df_c[df_c["LOJA_KEY"].isin(cfg["lojas"])].copy()
+
+    if not df_c.empty:
+        max_data_base = pd.to_datetime(df_c["DATA"], errors="coerce").dropna().max().date()
+        data_referencia = min(max_data_base, cfg["fim"])
+    else:
+        data_referencia = min(date.today(), cfg["fim"])
+
+    # Decorativo + Industrial: base da condição coletiva e campanha dos gerentes.
+    mask_di = df_c["SEGMENTO_N"].apply(_eh_segmento_decor_industrial)
+    df_di = df_c[mask_di].copy()
+    realizado_desbloqueio = float(df_di["FAT_LINHA"].sum()) if len(df_di) else 0.0
+    desbloqueado = realizado_desbloqueio >= cfg["meta_desbloqueio"]
+    pct_desbloqueio = (realizado_desbloqueio / cfg["meta_desbloqueio"] * 100.0) if cfg["meta_desbloqueio"] else 0.0
+    falta_desbloqueio = max(cfg["meta_desbloqueio"] - realizado_desbloqueio, 0.0)
+
+    st.markdown("### Condição para desbloqueio")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Realizado D+I", "R$ " + format_brl(realizado_desbloqueio))
+    c2.metric("Meta coletiva", "R$ " + format_brl(cfg["meta_desbloqueio"]))
+    c3.metric("Atingimento", _fmt_pct_campanha(pct_desbloqueio))
+    c4.metric("Saldo", "R$ " + format_brl(falta_desbloqueio))
+    st.progress(min(max(pct_desbloqueio / 100.0, 0.0), 1.0))
+    if desbloqueado:
+        st.success("✅ Campanha desbloqueada: as premiações podem ser liberadas para quem atingir a regra individual.")
+    else:
+        st.warning(f"🔒 Premiações ainda bloqueadas. Faltam R$ {format_brl(falta_desbloqueio)} para o grupo das cinco lojas atingir R$ 525.000,00.")
+
+    # -------------------- Gerentes --------------------
+    st.markdown("### Campanha 1 | Gerentes")
+    st.caption("Meta acumulada de Decorativo + Industrial por loja no Q3. Ao atingir a meta, o gerente recebe 0,5% sobre todo o faturamento D+I da loja no trimestre, condicionado ao desbloqueio geral.")
+
+    realizado_loja = df_di.groupby("LOJA_KEY")["FAT_LINHA"].sum().to_dict() if len(df_di) else {}
+    rows_g = []
+    for loja_key, meta in cfg["metas_gerentes"].items():
+        realizado = float(realizado_loja.get(loja_key, 0.0) or 0.0)
+        ating = (realizado / meta * 100.0) if meta else 0.0
+        falta = max(meta - realizado, 0.0)
+        bateu = realizado >= meta
+        premio = realizado * cfg["premio_gerente_pct"] if bateu else 0.0
+        if bateu and desbloqueado:
+            status_premio = "✅ Liberado"
+        elif bateu:
+            status_premio = "🔒 Aguardando desbloqueio"
+        else:
+            status_premio = "—"
+        rows_g.append({
+            "LOJA": CAMPANHA_LOJA_NOMES.get(loja_key, loja_key),
+            "META": meta,
+            "REALIZADO": realizado,
+            "ATINGIMENTO": ating,
+            "FALTA": falta,
+            "META_ATINGIDA": bateu,
+            "PREMIO_CALCULADO": premio,
+            "STATUS_PREMIO": status_premio,
+        })
+    tbl_g = pd.DataFrame(rows_g)
+    tbl_g_disp = tbl_g.copy()
+    tbl_g_disp["Meta Q3"] = tbl_g_disp["META"].apply(lambda v: "R$ " + format_brl(v))
+    tbl_g_disp["Realizado Q3"] = tbl_g_disp["REALIZADO"].apply(lambda v: "R$ " + format_brl(v))
+    tbl_g_disp["Atingimento"] = tbl_g_disp["ATINGIMENTO"].apply(_fmt_pct_campanha)
+    tbl_g_disp["Falta"] = tbl_g_disp["FALTA"].apply(lambda v: "R$ " + format_brl(v))
+    tbl_g_disp["Situação"] = tbl_g_disp["META_ATINGIDA"].map({True: "✅ Meta atingida", False: "⏳ Em andamento"})
+    tbl_g_disp["Prêmio calculado"] = tbl_g_disp["PREMIO_CALCULADO"].apply(lambda v: "R$ " + format_brl(v) if v > 0 else "—")
+    tbl_g_disp["Status prêmio"] = tbl_g_disp["STATUS_PREMIO"]
+    st.dataframe(
+        tbl_g_disp[["LOJA", "Meta Q3", "Realizado Q3", "Atingimento", "Falta", "Situação", "Prêmio calculado", "Status prêmio"]].rename(columns={"LOJA": "Loja"}),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # -------------------- Vendedores Coral --------------------
+    st.markdown("### Campanha 2 | Vendedores Coral")
+    st.caption("Campanha individual nas cinco lojas do Super Setembro. Meta: R$ 35.000,00 em Coral no Q3. Ao atingir, recebe 1% sobre todo o faturamento Coral do trimestre, condicionado ao desbloqueio geral.")
+
+    marca_alvo = canonical_key(cfg["marca_vendedores"])
+    mask_coral = df_c["MARCA_N"].astype(str).apply(lambda x: marca_alvo in canonical_key(x))
+    df_coral = df_c[mask_coral].copy()
+    rows_v = []
+    if not df_coral.empty:
+        agr = (
+            df_coral.groupby("VENDEDOR_N", dropna=False)
+            .agg(
+                REALIZADO=("FAT_LINHA", "sum"),
+                LOJAS=("LOJA_N", lambda s: " / ".join(sorted(set(str(x) for x in s if str(x).strip())))),
+            )
+            .reset_index()
+        )
+        for _, r in agr.iterrows():
+            realizado = float(r["REALIZADO"] or 0.0)
+            ating = (realizado / cfg["meta_vendedor"] * 100.0) if cfg["meta_vendedor"] else 0.0
+            falta = max(cfg["meta_vendedor"] - realizado, 0.0)
+            bateu = realizado >= cfg["meta_vendedor"]
+            premio = realizado * cfg["premio_vendedor_pct"] if bateu else 0.0
+            if bateu and desbloqueado:
+                status_premio = "✅ Liberado"
+            elif bateu:
+                status_premio = "🔒 Aguardando desbloqueio"
+            else:
+                status_premio = "—"
+            rows_v.append({
+                "VENDEDOR": str(r["VENDEDOR_N"]),
+                "LOJA": str(r["LOJAS"]),
+                "REALIZADO": realizado,
+                "ATINGIMENTO": ating,
+                "FALTA": falta,
+                "META_ATINGIDA": bateu,
+                "PREMIO_CALCULADO": premio,
+                "STATUS_PREMIO": status_premio,
+            })
+    tbl_v = pd.DataFrame(rows_v, columns=["VENDEDOR", "LOJA", "REALIZADO", "ATINGIMENTO", "FALTA", "META_ATINGIDA", "PREMIO_CALCULADO", "STATUS_PREMIO"])
+    if not tbl_v.empty:
+        tbl_v = tbl_v.sort_values(["REALIZADO", "VENDEDOR"], ascending=[False, True]).reset_index(drop=True)
+        tbl_v_disp = tbl_v.copy()
+        tbl_v_disp["Coral Q3"] = tbl_v_disp["REALIZADO"].apply(lambda v: "R$ " + format_brl(v))
+        tbl_v_disp["Meta"] = "R$ " + format_brl(cfg["meta_vendedor"])
+        tbl_v_disp["Atingimento"] = tbl_v_disp["ATINGIMENTO"].apply(_fmt_pct_campanha)
+        tbl_v_disp["Falta"] = tbl_v_disp["FALTA"].apply(lambda v: "R$ " + format_brl(v))
+        tbl_v_disp["Situação"] = tbl_v_disp["META_ATINGIDA"].map({True: "✅ Meta atingida", False: "⏳ Em andamento"})
+        tbl_v_disp["Prêmio calculado"] = tbl_v_disp["PREMIO_CALCULADO"].apply(lambda v: "R$ " + format_brl(v) if v > 0 else "—")
+        tbl_v_disp["Status prêmio"] = tbl_v_disp["STATUS_PREMIO"]
+        st.dataframe(
+            tbl_v_disp[["VENDEDOR", "LOJA", "Coral Q3", "Meta", "Atingimento", "Falta", "Situação", "Prêmio calculado", "Status prêmio"]].rename(columns={"VENDEDOR": "Vendedor", "LOJA": "Loja"}),
+            use_container_width=True,
+            hide_index=True,
+            height=min(640, 80 + 35 * max(len(tbl_v_disp), 1)),
+        )
+    else:
+        st.info("Nenhuma venda Coral encontrada no período da campanha para as cinco lojas participantes.")
+
+    # -------------------- Exportação WhatsApp --------------------
+    st.markdown("### 📲 Exportar parcial para WhatsApp")
+    texto_wa = _montar_texto_whatsapp_super_setembro(
+        cfg=cfg,
+        status_nome=status_nome,
+        data_referencia=data_referencia,
+        desbloqueado=desbloqueado,
+        realizado_desbloqueio=realizado_desbloqueio,
+        tabela_gerentes=tbl_g,
+        tabela_vendedores=tbl_v,
+    )
+    cc1, cc2 = st.columns([1, 1])
+    with cc1:
+        _botao_copiar_texto_campanha(texto_wa, key="super_setembro_whatsapp")
+    with cc2:
+        st.download_button(
+            "⬇️ Baixar texto (.txt)",
+            texto_wa.encode("utf-8"),
+            file_name="super_setembro_parcial_whatsapp.txt" if status_nome != "FINALIZADA" else "super_setembro_resultado_final_whatsapp.txt",
+            mime="text/plain",
+            use_container_width=True,
+            key="down_super_setembro_whatsapp",
+        )
+    st.text_area("Prévia do texto para WhatsApp", texto_wa, height=420, key="preview_super_setembro_whatsapp")
+    st.caption(f"Período da campanha: {cfg['inicio'].strftime('%d/%m/%Y')} a {cfg['fim'].strftime('%d/%m/%Y')} | Dados considerados até {data_referencia.strftime('%d/%m/%Y')}")
+
+
 # =========================
 # Carrega e prepara base
 # =========================
@@ -1813,7 +2159,10 @@ VAL_COL = "VR_TOTAL_NUM" if use_vr_total else "FAT_LINHA"
 # =========================
 # Navegação
 # =========================
-pagina_app = st.sidebar.radio("Página", ["Dashboard", "Relatórios"], index=0)
+pagina_app = st.sidebar.radio("Página", ["Dashboard", "Campanhas", "Relatórios"], index=0)
+if pagina_app == "Campanhas":
+    render_super_setembro(df)
+    st.stop()
 if pagina_app == "Relatórios":
     render_relatorios_whatsapp(df, VAL_COL)
     st.stop()
