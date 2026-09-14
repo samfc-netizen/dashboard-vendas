@@ -1967,9 +1967,15 @@ def _botao_copiar_texto_campanha(texto: str, key: str = "copiar_campanha"):
     )
 
 
-def render_super_setembro(df_base: pd.DataFrame):
+def render_super_setembro(df_base: pd.DataFrame | None = None):
     cfg = CAMPANHAS["SUPER_SETEMBRO_2026"]
     status_nome, status_emoji = _status_campanha(cfg)
+
+    # IMPORTANTE: campanhas usam SEMPRE a base completa de vendas,
+    # independentemente dos filtros de mês/período/loja/vendedor do Dashboard.
+    # Isso garante que o Super Setembro considere todo o Q3 (jul + ago + set).
+    df_base_campanha = carregar_dados().copy()
+    df_base_campanha = df_base_campanha.loc[df_base_campanha["FAT_LINHA"].notna()].copy()
 
     st.markdown("## 🏆 Campanhas")
     st.markdown(
@@ -1984,12 +1990,18 @@ def render_super_setembro(df_base: pd.DataFrame):
         unsafe_allow_html=True,
     )
 
-    df_c = df_base.copy()
-    df_c = df_c[df_c["DATA"].notna()].copy()
+    # Recorte FIXO da campanha: 01/07/2026 a 30/09/2026.
+    # Não depende de nenhum filtro selecionado na barra lateral do Dashboard.
+    df_c = df_base_campanha[df_base_campanha["DATA"].notna()].copy()
     ini_ts = pd.Timestamp(cfg["inicio"])
     fim_exclusivo = pd.Timestamp(cfg["fim"]) + pd.Timedelta(days=1)
     df_c = df_c[(df_c["DATA"] >= ini_ts) & (df_c["DATA"] < fim_exclusivo)].copy()
     df_c = df_c[df_c["LOJA_KEY"].isin(cfg["lojas"])].copy()
+
+    st.caption(
+        "Base da campanha: Q3 completo (01/07/2026 a 30/09/2026), "
+        "independentemente dos filtros do Dashboard."
+    )
 
     if not df_c.empty:
         max_data_base = pd.to_datetime(df_c["DATA"], errors="coerce").dropna().max().date()
@@ -2161,7 +2173,7 @@ VAL_COL = "VR_TOTAL_NUM" if use_vr_total else "FAT_LINHA"
 # =========================
 pagina_app = st.sidebar.radio("Página", ["Dashboard", "Campanhas", "Relatórios"], index=0)
 if pagina_app == "Campanhas":
-    render_super_setembro(df)
+    render_super_setembro()
     st.stop()
 if pagina_app == "Relatórios":
     render_relatorios_whatsapp(df, VAL_COL)
