@@ -188,7 +188,7 @@ def aplicar_estilo_visual():
         .bi-alert {background:#fff; border:1px solid #e4eaf3; border-radius:14px; padding:16px; margin:7px 0; box-shadow:0 4px 18px rgba(25,61,110,.04);}
         .bi-alert-label {font-size:12px; color:#687b97; margin-bottom:6px;}
         .bi-alert-value {font-size:clamp(16px,1.5vw,24px); font-weight:800; color:#c62828; overflow-wrap:anywhere;}
-        .bi-alert-value.positive {color:#087f66;}
+        .bi-alert-value.positive {color:#1565c0;}
         @media(max-width:850px){.block-container{padding-left:1rem;padding-right:1rem}.hero-card{padding:18px}.hero-card h1{font-size:23px}.bi-heading h2{font-size:19px}}
 
         /* Alternância automática pelo viewport: sem depender de user-agent ou seleção manual. */
@@ -202,13 +202,13 @@ def aplicar_estilo_visual():
         .bi-mobile-cell {background:#f5f8fc;padding:10px;border-radius:10px;min-width:0;}
         .bi-mobile-cell small {display:block;color:#65758c;font-size:10px;margin-bottom:4px;}
         .bi-mobile-cell strong {font-size:13px;color:#142b52;overflow-wrap:anywhere;}
-        .bi-positive {color:#c62828!important;}
-        .bi-negative {color:#1565c0!important;}
+        .bi-positive {color:#1565c0!important;}
+        .bi-negative {color:#c62828!important;}
         .bi-track {height:7px;background:#e7eef8;border-radius:8px;overflow:hidden;margin-top:6px;}
-        .bi-fill {height:100%;border-radius:8px;background:#1565c0;}
-        .bi-fill.positive {background:#c62828;}
-        .bi-pill {font-size:11px;font-weight:800;padding:5px 9px;border-radius:99px;background:#eaf2ff;color:#1565c0;white-space:nowrap;}
-        .bi-pill.positive {background:#fff0f0;color:#c62828;}
+        .bi-fill {height:100%;border-radius:8px;background:#c62828;}
+        .bi-fill.positive {background:#1565c0;}
+        .bi-pill {font-size:11px;font-weight:800;padding:5px 9px;border-radius:99px;background:#fff0f0;color:#c62828;white-space:nowrap;}
+        .bi-pill.positive {background:#eaf2ff;color:#1565c0;}
         @media(max-width:767px){
           .bi-desktop-only {display:none!important;}
           .bi-mobile-only {display:block!important;}
@@ -713,9 +713,9 @@ def color_pos_neg(v):
     except Exception:
         return ""
     if x > 0:
-        return "color: #c62828; font-weight: 700;"  # vermelho
-    if x < 0:
         return "color: #1565c0; font-weight: 700;"  # azul
+    if x < 0:
+        return "color: #c62828; font-weight: 700;"  # vermelho
     return ""
 
 
@@ -3134,7 +3134,7 @@ with aba_resumo:
         sty_prev = prev_view.style.apply(row_total_style, axis=1)
         for col in ['DIF_PREV_X_ANO1_R$', 'CRESC_%', 'DIF_PREV_X_META_R$']:
             sty_prev = styler_map_compat(sty_prev, color_pos_neg, subset=[col])
-        sty_prev = sty_prev.bar(subset=['ATING_META_%'], color='#c62828', vmin=0, vmax=120, width=80, height=52)
+        sty_prev = sty_prev.bar(subset=['ATING_META_%'], color='#1565c0', vmin=0, vmax=120, width=80, height=52)
         sty_prev = sty_prev.format({
             'REALIZADO_R$': lambda v: 'R$ '+format_brl(v),
             'DIAS_VENDA': lambda v: format_decimal_pt(v, 1),
