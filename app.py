@@ -34,6 +34,13 @@ def aplicar_estilo_visual():
             --danger: #b91c1c;
         }
 
+
+        /* Navegação multipainel, sem alterar o menu lateral */
+        div[data-baseweb="tab-list"] {gap: 6px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;}
+        button[data-baseweb="tab"] {border-radius: 10px 10px 0 0; padding: 10px 15px; font-weight: 650;}
+        button[data-baseweb="tab"][aria-selected="true"] {background: #eaf2ff; color: #0f4c81;}
+        div[data-testid="stDataFrame"] {border-radius: 12px; overflow: hidden;}
+
         .stApp { background: var(--app-bg); }
 
         section[data-testid="stSidebar"] {
@@ -2335,6 +2342,11 @@ if st.sidebar.button("Recarregar agora (ignorar cache)", use_container_width=Tru
     st.cache_resource.clear()
     st.rerun()
 
+st.markdown("### Central de análise comercial")
+st.caption("Navegue entre a visão executiva, os detalhamentos e as análises específicas. Os filtros laterais valem para todas as áreas.")
+aba_resumo, aba_vendas, aba_marcas, aba_clientes, aba_compras = st.tabs([
+    "Visão geral", "Detalhamento de vendas", "Marcas e produtos", "Clientes", "Compras e conferência"
+])
 st.markdown(f"**Meses selecionados:** {', '.join(MES_NUM_TO_NOME[m] for m in mes_nums_sel)}")
 
 # =========================
@@ -2360,470 +2372,195 @@ df_f = df_f[df_f["DATA"].dt.month.isin(mes_nums_sel)].copy()
 
 fat_total = float(df_f["FAT_LINHA"].sum()) if len(df_f) else 0.0
 
-# ============================================================
-# Comparativo: 2025 (fixo) x 2026 (Excel)
-# ============================================================
-st.subheader("Comparativo: 2025 (Ano-1) x 2026 (Ano Atual)")
+with aba_resumo:
+    st.markdown("#### Painel executivo")
+    st.caption("Resumo de faturamento, meta, previsão e vendas diárias por loja.")
 
-lojas_keys_aplicadas = [canonical_key(x) for x in lojas_sel_aplicadas if canonical_key(x)]
-df_meta_ref, df_ano1_ref, dias_uteis_map = carregar_referencias_planejamento()
+    # ============================================================
+    # Comparativo: 2025 (fixo) x 2026 (Excel)
+    # ============================================================
+    st.subheader("Comparativo: 2025 (Ano-1) x 2026 (Ano Atual)")
 
-# Ano-1 agora vem preferencialmente da planilha METAS.xlsx, aba ANO-1.
-# Se a planilha auxiliar não existir ou estiver vazia, mantém os valores fixos antigos como fallback.
-if df_ano1_ref is not None and not df_ano1_ref.empty:
-    df_2025 = df_ano1_ref[df_ano1_ref["LOJA_KEY"].isin(lojas_keys_aplicadas)].copy()
-else:
-    df_2025 = montar_df_2025_fixo(lojas_keys_aplicadas)
+    lojas_keys_aplicadas = [canonical_key(x) for x in lojas_sel_aplicadas if canonical_key(x)]
+    df_meta_ref, df_ano1_ref, dias_uteis_map = carregar_referencias_planejamento()
 
-df_2026 = df.loc[df["DATA"].notna() & (df["DATA"].dt.year == ANO_ATUAL)]
-
-if lojas_sel_aplicadas:
-    df_2026 = df_2026[df_2026["LOJA_N"].isin(lojas_sel_aplicadas)].copy()
-else:
-    df_2026 = df_2026.iloc[0:0].copy()
-
-if vendedores_sel_aplicados:
-    df_2026 = df_2026[df_2026["VENDEDOR_N"].isin(vendedores_sel_aplicados)].copy()
-else:
-    df_2026 = df_2026.iloc[0:0].copy()
-
-df_2026 = df_2026[(df_2026["DATA"] >= data_ini_ts) & (df_2026["DATA"] < data_fim_exclusivo_ts)].copy()
-df_2026["MES_NUM"] = df_2026["DATA"].dt.month
-
-df_2026_mensal = (
-    df_2026.groupby(["LOJA_KEY", "MES_NUM"], dropna=False)["FAT_LINHA"]
-    .sum()
-    .reset_index()
-    .rename(columns={"FAT_LINHA": "VENDAS_2026"})
-)
-
-df_comp = df_2025.merge(df_2026_mensal, on=["LOJA_KEY", "MES_NUM"], how="left")
-df_comp["VENDAS_2026"] = df_comp["VENDAS_2026"].fillna(0.0)
-df_comp["VAR_R$"] = df_comp["VENDAS_2026"] - df_comp["VENDAS_2025"]
-df_comp["VAR_%"] = df_comp.apply(
-    lambda r: (r["VAR_R$"] / r["VENDAS_2025"] * 100) if r["VENDAS_2025"] not in (0, None) else None,
-    axis=1,
-)
-
-map_key_to_loja = (
-    df[["LOJA_KEY", "LOJA_N"]].dropna().drop_duplicates().groupby("LOJA_KEY")["LOJA_N"].first().to_dict()
-)
-df_comp["LOJA"] = df_comp["LOJA_KEY"].map(lambda k: str(map_key_to_loja.get(k, k)))
-df_comp["MES"] = df_comp["MES_NUM"].map({m: nome for m, nome in MESES})
-
-df_mes = df_comp[df_comp["MES_NUM"].isin(mes_nums_sel)].copy()
-
-total_2025 = float(df_mes["VENDAS_2025"].sum()) if len(df_mes) else 0.0
-total_2026 = float(df_mes["VENDAS_2026"].sum()) if len(df_mes) else 0.0
-var_abs_total = total_2026 - total_2025
-var_pct_total = (var_abs_total / total_2025 * 100) if total_2025 != 0 else None
-
-k1, k2, k3, k4 = st.columns(4)
-k1.metric(f"Total {ANO_BASE} (R$)", "R$ " + format_brl(total_2025))
-k2.metric(f"Total {ANO_ATUAL} (R$)", "R$ " + format_brl(total_2026))
-k3.metric("Variação (R$)", "R$ " + format_brl(var_abs_total))
-k4.metric("Variação (%)", (f"{var_pct_total:.2f}%".replace(".", ",")) if var_pct_total is not None else "—")
-
-# ============================================================
-# KPI: META x REALIZADO (velocímetro)
-# ============================================================
-st.markdown("### Meta × Realizado")
-
-# Meta agora vem preferencialmente da planilha METAS.xlsx, aba META DAUTO TINTAS.
-# Se a planilha auxiliar não existir ou estiver vazia, mantém os valores fixos antigos como fallback.
-if df_meta_ref is not None and not df_meta_ref.empty:
-    df_meta = df_meta_ref[df_meta_ref["LOJA_KEY"].isin(lojas_keys_aplicadas)].copy()
-else:
-    df_meta = montar_df_metas_fixas(lojas_keys_aplicadas)
-
-df_meta_sel = df_meta[df_meta["MES_NUM"].isin(mes_nums_sel)].copy()
-
-meta_total_sel = float(df_meta_sel["META"].sum()) if len(df_meta_sel) else 0.0
-real_total_sel = float(df_mes["VENDAS_2026"].sum()) if len(df_mes) else 0.0
-
-# ===== Previsão de fechamento por calendário comercial ajustado
-df_prev = df_f.copy()
-df_prev = df_prev[df_prev["DATA"].notna()].copy()
-df_prev = df_prev[df_prev["DATA"].dt.month.isin(mes_nums_sel)].copy()
-
-# O calendário da previsão é calculado pela empresa inteira, e não apenas pelo
-# filtro de loja/vendedor. Assim, um dia útil sem venda em uma loja específica
-# continua contando como dia comercial; só é removido quando a empresa inteira
-# ficou com venda zero naquele dia.
-infos_calendario = []
-for _mes_calc in mes_nums_sel:
-    try:
-        import calendar
-        _ultimo_mes = date(ANO_ATUAL, int(_mes_calc), calendar.monthrange(ANO_ATUAL, int(_mes_calc))[1])
-        _corte_mes = min(data_fim, _ultimo_mes)
-        infos_calendario.append(_calcular_calendario_comercial_mes(df, ANO_ATUAL, int(_mes_calc), _corte_mes))
-    except Exception:
-        pass
-
-dias_venda_equiv = float(sum(float(x.get("dias_realizados", 0.0) or 0.0) for x in infos_calendario))
-dias_uteis_equiv = float(sum(float(x.get("dias_validos_mes", 0.0) or 0.0) for x in infos_calendario))
-dias_restantes_equiv = float(sum(float(x.get("dias_restantes", 0.0) or 0.0) for x in infos_calendario))
-dias_ignorados_periodo = []
-for _info in infos_calendario:
-    dias_ignorados_periodo.extend(_info.get("dias_ignorados", []) or [])
-
-previsao_fechamento, media_por_dia_venda = _previsao_por_calendario(real_total_sel, dias_venda_equiv, dias_restantes_equiv)
-if dias_venda_equiv <= 0:
-    media_por_dia_venda = None
-    previsao_fechamento = None
-
-clientes_base = df_prev.copy()
-if "CLIENTE_N" in clientes_base.columns:
-    clientes_base = clientes_base[clientes_base["CLIENTE_N"].astype(str).str.strip().ne("")]
-    clientes_base = clientes_base[clientes_base["CLIENTE_N"].astype(str).str.upper().ne("SEM CLIENTE")]
-if VAL_COL in clientes_base.columns:
-    clientes_base = clientes_base[pd.to_numeric(clientes_base[VAL_COL], errors="coerce").fillna(0) > 0]
-clientes_ativos = int(clientes_base["CLIENTE_N"].nunique()) if ("CLIENTE_N" in clientes_base.columns and len(clientes_base)) else 0
-
-pct_meta = (real_total_sel / meta_total_sel * 100) if meta_total_sel != 0 else None
-dif_meta_r = real_total_sel - meta_total_sel
-dif_meta_p = (dif_meta_r / meta_total_sel * 100) if meta_total_sel != 0 else None
-
-st.markdown("#### Realizado e Previsão")
-pc1, pc2, pc3, pc4, pc5 = st.columns(5)
-with pc1:
-    st.metric("Faturamento Atual (R$)", "R$ " + format_brl(real_total_sel))
-with pc2:
-    st.metric("Dias de Venda", format_decimal_pt(dias_venda_equiv, 1), f"Restam {format_decimal_pt(dias_restantes_equiv, 1)}")
-with pc3:
-    st.metric("Média por Dia de Venda", ("R$ " + format_brl(media_por_dia_venda)) if media_por_dia_venda is not None else "—")
-with pc4:
-    st.metric("Previsão de Fechamento", ("R$ " + format_brl(previsao_fechamento)) if previsao_fechamento is not None else "—")
-with pc5:
-    st.metric("Clientes Ativos", f"{clientes_ativos:,}".replace(",", "."))
-
-st.caption(
-    "Dias de venda: segunda a sexta = 1, sábado = 0,5. "
-    "Dias comerciais com venda zero na empresa inteira são tratados como feriado/dia sem expediente e saem da previsão."
-    + (f" Dias ignorados no recorte: {', '.join(dias_ignorados_periodo)}." if dias_ignorados_periodo else "")
-)
-
-a1, a2, a3 = st.columns([1.0, 1.0, 1.6], gap="large")
-with a1:
-    st.metric("Meta (R$)", "R$ " + format_brl(meta_total_sel))
-with a2:
-    st.metric("Realizado (R$)", "R$ " + format_brl(real_total_sel))
-with a3:
-    if pct_meta is None:
-        st.info("Meta zerada para o recorte selecionado (não é possível calcular %).")
+    # Ano-1 agora vem preferencialmente da planilha METAS.xlsx, aba ANO-1.
+    # Se a planilha auxiliar não existir ou estiver vazia, mantém os valores fixos antigos como fallback.
+    if df_ano1_ref is not None and not df_ano1_ref.empty:
+        df_2025 = df_ano1_ref[df_ano1_ref["LOJA_KEY"].isin(lojas_keys_aplicadas)].copy()
     else:
-        max_axis = 120
-        val = max(0, pct_meta)
-        fig_gauge = go.Figure(
-            go.Indicator(
-                mode="gauge+number",
-                value=val,
-                number={"suffix": "%", "valueformat": ".1f"},
-                title={"text": "% da meta atingida"},
-                gauge={
-                    "axis": {"range": [0, max_axis]},
-                    "bar": {"color": "#1f77b4"},
-                    "steps": [
-                        {"range": [0, 80], "color": "#f2f2f2"},
-                        {"range": [80, 100], "color": "#e6e6e6"},
-                        {"range": [100, max_axis], "color": "#d9d9d9"},
-                    ],
-                    "threshold": {"line": {"color": "#d62728", "width": 3}, "thickness": 0.75, "value": 100},
-                },
-            )
-        )
-        fig_gauge.update_layout(margin=dict(l=20, r=20, t=60, b=10), height=260)
-        st.plotly_chart(fig_gauge, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+        df_2025 = montar_df_2025_fixo(lojas_keys_aplicadas)
 
-b1, b2 = st.columns(2)
-with b1:
-    st.metric("Diferença (Realizado − Meta) (R$)", "R$ " + format_brl(dif_meta_r))
-with b2:
-    st.metric("Diferença (%)", (f"{dif_meta_p:.2f}%".replace(".", ",")) if dif_meta_p is not None else "—")
+    df_2026 = df.loc[df["DATA"].notna() & (df["DATA"].dt.year == ANO_ATUAL)]
 
-# ------------------------------------------------------------
-# Tabela Mês x Loja (drill)
-# ------------------------------------------------------------
-with st.expander("Abrir tabela comparativa Ano-1"):
-    base_tbl = df_comp[
-        ["MES", "MES_NUM", "LOJA", "LOJA_KEY", "VENDAS_2025", "VENDAS_2026", "VAR_R$", "VAR_%"]
-    ].copy()
+    if lojas_sel_aplicadas:
+        df_2026 = df_2026[df_2026["LOJA_N"].isin(lojas_sel_aplicadas)].copy()
+    else:
+        df_2026 = df_2026.iloc[0:0].copy()
 
-    base_tbl = base_tbl.sort_values(["LOJA_KEY", "MES_NUM"]).copy()
-    base_tbl["ACUM_DIF_R$"] = base_tbl.groupby("LOJA_KEY")["VAR_R$"].cumsum()
+    if vendedores_sel_aplicados:
+        df_2026 = df_2026[df_2026["VENDEDOR_N"].isin(vendedores_sel_aplicados)].copy()
+    else:
+        df_2026 = df_2026.iloc[0:0].copy()
 
-    rows = []
-    total_acum = 0.0
+    df_2026 = df_2026[(df_2026["DATA"] >= data_ini_ts) & (df_2026["DATA"] < data_fim_exclusivo_ts)].copy()
+    df_2026["MES_NUM"] = df_2026["DATA"].dt.month
 
-    for mes_num, mes_nome in MESES:
-        bloco = base_tbl[base_tbl["MES_NUM"] == mes_num].copy()
-        if len(bloco) == 0:
-            continue
-
-        bloco["_LOJA_ORD"] = bloco["LOJA_KEY"].map(lambda k: LOJA_KEY_RANK.get(k, DEFAULT_RANK)).astype(int)
-        bloco = bloco.sort_values(["_LOJA_ORD", "LOJA"]).drop(columns=["_LOJA_ORD"])
-
-        for _, r in bloco.iterrows():
-            rows.append(
-                {
-                    "MES": mes_nome,
-                    "LOJA": r["LOJA"],
-                    "2025 (R$)": r["VENDAS_2025"],
-                    "2026 (R$)": r["VENDAS_2026"],
-                    "Dif (R$)": r["VAR_R$"],
-                    "Dif (%)": r["VAR_%"],
-                    "Acum Dif (R$)": r["ACUM_DIF_R$"],
-                }
-            )
-
-        sum_2025 = float(bloco["VENDAS_2025"].sum())
-        sum_2026 = float(bloco["VENDAS_2026"].sum())
-        sum_var = sum_2026 - sum_2025
-        sum_pct = (sum_var / sum_2025 * 100) if sum_2025 != 0 else None
-
-        total_acum += sum_var
-
-        rows.append(
-            {
-                "MES": mes_nome,
-                "LOJA": "TOTAL",
-                "2025 (R$)": sum_2025,
-                "2026 (R$)": sum_2026,
-                "Dif (R$)": sum_var,
-                "Dif (%)": sum_pct,
-                "Acum Dif (R$)": total_acum,
-            }
-        )
-
-    df_tbl = pd.DataFrame(rows)
-    df_tbl_disp = month_block_style(df_tbl)
-
-    styler_tbl = (
-        df_tbl_disp.style
-        .apply(
-            lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
-            if str(row.get("LOJA", "")).upper() == "TOTAL"
-            else [""] * len(row),
-            axis=1,
-        )
-        .format(
-            {
-                "2025 (R$)": lambda v: "R$ " + format_brl(v),
-                "2026 (R$)": lambda v: "R$ " + format_brl(v),
-                "Dif (R$)": lambda v: "R$ " + format_brl(v),
-                "Dif (%)": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
-                "Acum Dif (R$)": lambda v: "R$ " + format_brl(v),
-            }
-        )
-        .pipe(lambda s: styler_map_compat(s, color_pos_neg, subset=["Dif (R$)", "Dif (%)", "Acum Dif (R$)"]))
-    )
-
-    st.dataframe(styler_tbl, use_container_width=True, hide_index=True, height=560)
-
-
-    # ------------------------------------------------------------
-    # Tabela Meta x Realizado (drill)
-    # ------------------------------------------------------------
-with st.expander("Abrir Tabela Meta x Realizado"):
-    # Meta e Realizado por loja no recorte selecionado (meses + filtros de loja + período)
-    # Meta vem do dicionário fixo; Realizado vem do Excel (ANO_ATUAL) no mesmo recorte.
-    meta_loja = (
-        df_meta_sel.groupby("LOJA_KEY", dropna=False)["META"]
+    df_2026_mensal = (
+        df_2026.groupby(["LOJA_KEY", "MES_NUM"], dropna=False)["FAT_LINHA"]
         .sum()
         .reset_index()
-        .rename(columns={"META": "META_R$"})
+        .rename(columns={"FAT_LINHA": "VENDAS_2026"})
     )
 
-    real_loja = (
-        df_mes.groupby("LOJA_KEY", dropna=False)["VENDAS_2026"]
-        .sum()
-        .reset_index()
-        .rename(columns={"VENDAS_2026": "REALIZADO_R$"})
-    )
-
-    mkp_tbl = meta_loja.merge(real_loja, on="LOJA_KEY", how="outer").fillna(0.0)
-
-    # Nome da loja
-    mkp_tbl["LOJA"] = mkp_tbl["LOJA_KEY"].map(lambda k: str(map_key_to_loja.get(k, k)))
-
-    mkp_tbl["DIF_R$"] = mkp_tbl["REALIZADO_R$"] - mkp_tbl["META_R$"]
-    mkp_tbl["% ATINGIDO"] = mkp_tbl.apply(
-        lambda r: (r["REALIZADO_R$"] / r["META_R$"] * 100) if r["META_R$"] not in (0, None) else None,
+    df_comp = df_2025.merge(df_2026_mensal, on=["LOJA_KEY", "MES_NUM"], how="left")
+    df_comp["VENDAS_2026"] = df_comp["VENDAS_2026"].fillna(0.0)
+    df_comp["VAR_R$"] = df_comp["VENDAS_2026"] - df_comp["VENDAS_2025"]
+    df_comp["VAR_%"] = df_comp.apply(
+        lambda r: (r["VAR_R$"] / r["VENDAS_2025"] * 100) if r["VENDAS_2025"] not in (0, None) else None,
         axis=1,
     )
 
-    # Ordena lojas (mesma ordem usada no comparativo)
-    mkp_tbl["_LOJA_ORD"] = mkp_tbl["LOJA_KEY"].map(lambda k: LOJA_KEY_RANK.get(k, DEFAULT_RANK)).astype(int)
-    mkp_tbl = mkp_tbl.sort_values(["_LOJA_ORD", "LOJA"]).drop(columns=["_LOJA_ORD"])
+    map_key_to_loja = (
+        df[["LOJA_KEY", "LOJA_N"]].dropna().drop_duplicates().groupby("LOJA_KEY")["LOJA_N"].first().to_dict()
+    )
+    df_comp["LOJA"] = df_comp["LOJA_KEY"].map(lambda k: str(map_key_to_loja.get(k, k)))
+    df_comp["MES"] = df_comp["MES_NUM"].map({m: nome for m, nome in MESES})
 
-    # Linha TOTAL
-    t_meta = float(mkp_tbl["META_R$"].sum()) if len(mkp_tbl) else 0.0
-    t_real = float(mkp_tbl["REALIZADO_R$"].sum()) if len(mkp_tbl) else 0.0
-    t_dif = t_real - t_meta
-    t_pct = (t_real / t_meta * 100) if t_meta != 0 else None
+    df_mes = df_comp[df_comp["MES_NUM"].isin(mes_nums_sel)].copy()
 
-    mkp_tbl = pd.concat(
-        [
-            mkp_tbl,
-            pd.DataFrame(
-                [
-                    {
-                        "LOJA_KEY": "",
-                        "LOJA": "TOTAL",
-                        "META_R$": t_meta,
-                        "REALIZADO_R$": t_real,
-                        "DIF_R$": t_dif,
-                        "% ATINGIDO": t_pct,
-                    }
-                ]
-            ),
-        ],
-        ignore_index=True,
+    total_2025 = float(df_mes["VENDAS_2025"].sum()) if len(df_mes) else 0.0
+    total_2026 = float(df_mes["VENDAS_2026"].sum()) if len(df_mes) else 0.0
+    var_abs_total = total_2026 - total_2025
+    var_pct_total = (var_abs_total / total_2025 * 100) if total_2025 != 0 else None
+
+    # Indicadores de ano anterior são exibidos junto aos KPIs executivos, mais abaixo.
+
+    # ============================================================
+    # KPI: META x REALIZADO (velocímetro)
+    # ============================================================
+    st.markdown("### Meta × Realizado")
+
+    # Meta agora vem preferencialmente da planilha METAS.xlsx, aba META DAUTO TINTAS.
+    # Se a planilha auxiliar não existir ou estiver vazia, mantém os valores fixos antigos como fallback.
+    if df_meta_ref is not None and not df_meta_ref.empty:
+        df_meta = df_meta_ref[df_meta_ref["LOJA_KEY"].isin(lojas_keys_aplicadas)].copy()
+    else:
+        df_meta = montar_df_metas_fixas(lojas_keys_aplicadas)
+
+    df_meta_sel = df_meta[df_meta["MES_NUM"].isin(mes_nums_sel)].copy()
+
+    meta_total_sel = float(df_meta_sel["META"].sum()) if len(df_meta_sel) else 0.0
+    real_total_sel = float(df_mes["VENDAS_2026"].sum()) if len(df_mes) else 0.0
+
+    # ===== Previsão de fechamento por calendário comercial ajustado
+    df_prev = df_f.copy()
+    df_prev = df_prev[df_prev["DATA"].notna()].copy()
+    df_prev = df_prev[df_prev["DATA"].dt.month.isin(mes_nums_sel)].copy()
+
+    # O calendário da previsão é calculado pela empresa inteira, e não apenas pelo
+    # filtro de loja/vendedor. Assim, um dia útil sem venda em uma loja específica
+    # continua contando como dia comercial; só é removido quando a empresa inteira
+    # ficou com venda zero naquele dia.
+    infos_calendario = []
+    for _mes_calc in mes_nums_sel:
+        try:
+            import calendar
+            _ultimo_mes = date(ANO_ATUAL, int(_mes_calc), calendar.monthrange(ANO_ATUAL, int(_mes_calc))[1])
+            _corte_mes = min(data_fim, _ultimo_mes)
+            infos_calendario.append(_calcular_calendario_comercial_mes(df, ANO_ATUAL, int(_mes_calc), _corte_mes))
+        except Exception:
+            pass
+
+    dias_venda_equiv = float(sum(float(x.get("dias_realizados", 0.0) or 0.0) for x in infos_calendario))
+    dias_uteis_equiv = float(sum(float(x.get("dias_validos_mes", 0.0) or 0.0) for x in infos_calendario))
+    dias_restantes_equiv = float(sum(float(x.get("dias_restantes", 0.0) or 0.0) for x in infos_calendario))
+    dias_ignorados_periodo = []
+    for _info in infos_calendario:
+        dias_ignorados_periodo.extend(_info.get("dias_ignorados", []) or [])
+
+    previsao_fechamento, media_por_dia_venda = _previsao_por_calendario(real_total_sel, dias_venda_equiv, dias_restantes_equiv)
+    if dias_venda_equiv <= 0:
+        media_por_dia_venda = None
+        previsao_fechamento = None
+
+    clientes_base = df_prev.copy()
+    if "CLIENTE_N" in clientes_base.columns:
+        clientes_base = clientes_base[clientes_base["CLIENTE_N"].astype(str).str.strip().ne("")]
+        clientes_base = clientes_base[clientes_base["CLIENTE_N"].astype(str).str.upper().ne("SEM CLIENTE")]
+    if VAL_COL in clientes_base.columns:
+        clientes_base = clientes_base[pd.to_numeric(clientes_base[VAL_COL], errors="coerce").fillna(0) > 0]
+    clientes_ativos = int(clientes_base["CLIENTE_N"].nunique()) if ("CLIENTE_N" in clientes_base.columns and len(clientes_base)) else 0
+
+    pct_meta = (real_total_sel / meta_total_sel * 100) if meta_total_sel != 0 else None
+    dif_meta_r = real_total_sel - meta_total_sel
+    dif_meta_p = (dif_meta_r / meta_total_sel * 100) if meta_total_sel != 0 else None
+
+    st.markdown("### Indicadores de desempenho")
+    kp1, kp2, kp3, kp4 = st.columns(4, gap="medium")
+    kp1.metric(f"Ano-1 ({ANO_BASE})", "R$ " + format_brl(total_2025))
+    kp2.metric("Realizado", "R$ " + format_brl(real_total_sel),
+               (f"{var_pct_total:+.2f}% vs. Ano-1".replace(".", ",")) if var_pct_total is not None else None)
+    kp3.metric("Média por dia de venda", "R$ " + format_brl(media_por_dia_venda) if media_por_dia_venda is not None else "—")
+    kp4.metric("Clientes ativos", f"{clientes_ativos:,}".replace(",", "."))
+    kp5, kp6, kp7, kp8 = st.columns(4, gap="medium")
+    kp5.metric("Meta", "R$ " + format_brl(meta_total_sel))
+    kp6.metric("Previsão de fechamento", "R$ " + format_brl(previsao_fechamento) if previsao_fechamento is not None else "—")
+    kp7.metric("Dias comerciais realizados", format_decimal_pt(dias_venda_equiv, 1))
+    kp8.metric("Dias comerciais restantes", format_decimal_pt(dias_restantes_equiv, 1))
+
+    st.caption(
+        "Dias de venda: segunda a sexta = 1, sábado = 0,5. "
+        "Dias comerciais com venda zero na empresa inteira são tratados como feriado/dia sem expediente e saem da previsão."
+        + (f" Dias ignorados no recorte: {', '.join(dias_ignorados_periodo)}." if dias_ignorados_periodo else "")
     )
 
-    view = mkp_tbl[["LOJA", "META_R$", "REALIZADO_R$", "DIF_R$", "% ATINGIDO"]].copy()
+    a1, a2, a3 = st.columns([1.0, 1.0, 1.6], gap="large")
+    with a1:
+        st.metric("Meta (R$)", "R$ " + format_brl(meta_total_sel))
+    with a2:
+        st.metric("Realizado (R$)", "R$ " + format_brl(real_total_sel))
+    with a3:
+        if pct_meta is None:
+            st.info("Meta zerada para o recorte selecionado (não é possível calcular %).")
+        else:
+            max_axis = 120
+            val = max(0, pct_meta)
+            fig_gauge = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=val,
+                    number={"suffix": "%", "valueformat": ".1f"},
+                    title={"text": "% da meta atingida"},
+                    gauge={
+                        "axis": {"range": [0, max_axis]},
+                        "bar": {"color": "#1f77b4"},
+                        "steps": [
+                            {"range": [0, 80], "color": "#f2f2f2"},
+                            {"range": [80, 100], "color": "#e6e6e6"},
+                            {"range": [100, max_axis], "color": "#d9d9d9"},
+                        ],
+                        "threshold": {"line": {"color": "#d62728", "width": 3}, "thickness": 0.75, "value": 100},
+                    },
+                )
+            )
+            fig_gauge.update_layout(margin=dict(l=20, r=20, t=60, b=10), height=260)
+            st.plotly_chart(fig_gauge, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
-    sty = (
-        view.style
-        .apply(lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
-        .format(
-            {
-                "META_R$": lambda v: "R$ " + format_brl(v),
-                "REALIZADO_R$": lambda v: "R$ " + format_brl(v),
-                "DIF_R$": lambda v: "R$ " + format_brl(v),
-                "% ATINGIDO": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
-            }
-        )
-        .pipe(lambda s: styler_map_compat(s, color_pos_neg, subset=["DIF_R$", "% ATINGIDO"]))
-    )
+    b1, b2 = st.columns(2)
+    with b1:
+        st.metric("Diferença (Realizado − Meta) (R$)", "R$ " + format_brl(dif_meta_r))
+    with b2:
+        st.metric("Diferença (%)", (f"{dif_meta_p:.2f}%".replace(".", ",")) if dif_meta_p is not None else "—")
 
-    st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
-
-with st.expander("Abrir Tabela Previsão de Fechamento"):
-    st.markdown("### Previsão de Fechamento por Loja")
-
-    # ------------------------------------------------------------
-    # Tabela de Previsão de Fechamento (drill)
-    # ------------------------------------------------------------
-    prev_base = df_2026.copy()
-    prev_base = prev_base[prev_base["MES_NUM"].isin(mes_nums_sel)].copy()
-
-    # Usa o mesmo contador de dias comerciais válidos para todas as lojas.
-    # Se apenas uma loja vendeu zero em um dia útil, esse dia continua contando;
-    # só sai do calendário quando a empresa inteira ficou sem venda.
-    lojas_prev_lista = sorted(set(prev_base["LOJA_KEY"].dropna().tolist()) | set(df_mes["LOJA_KEY"].dropna().tolist()) | set(df_meta_sel["LOJA_KEY"].dropna().tolist()))
-    dias_loja = pd.DataFrame({
-        "LOJA_KEY": lojas_prev_lista,
-        "DIAS_VENDA": [dias_venda_equiv] * len(lojas_prev_lista),
-    })
-
-    realizado_loja = (
-        df_mes.groupby("LOJA_KEY", dropna=False)["VENDAS_2026"]
-        .sum()
-        .reset_index(name="REALIZADO_R$")
-    )
-
-    ano1_loja = (
-        df_mes.groupby("LOJA_KEY", dropna=False)["VENDAS_2025"]
-        .sum()
-        .reset_index(name="ANO_1_R$")
-    )
-
-    meta_prev_loja = (
-        df_meta_sel.groupby("LOJA_KEY", dropna=False)["META"]
-        .sum()
-        .reset_index(name="META_R$")
-    )
-
-    base_lojas_prev = pd.DataFrame({"LOJA_KEY": sorted(set(df_meta_sel["LOJA_KEY"].dropna().tolist()) | set(df_mes["LOJA_KEY"].dropna().tolist()))})
-    prev_tbl = base_lojas_prev.merge(realizado_loja, on="LOJA_KEY", how="left")
-    prev_tbl = prev_tbl.merge(dias_loja, on="LOJA_KEY", how="left")
-    prev_tbl = prev_tbl.merge(ano1_loja, on="LOJA_KEY", how="left")
-    prev_tbl = prev_tbl.merge(meta_prev_loja, on="LOJA_KEY", how="left")
-    prev_tbl[["REALIZADO_R$", "DIAS_VENDA", "ANO_1_R$", "META_R$"]] = prev_tbl[["REALIZADO_R$", "DIAS_VENDA", "ANO_1_R$", "META_R$"]].fillna(0.0)
-
-    prev_tbl["MEDIA_DIA_R$"] = prev_tbl.apply(
-        lambda r: (r["REALIZADO_R$"] / r["DIAS_VENDA"]) if r["DIAS_VENDA"] not in (0, None) else None,
-        axis=1,
-    )
-    prev_tbl["PREVISAO_R$"] = prev_tbl.apply(
-        lambda r: (r["REALIZADO_R$"] + (r["MEDIA_DIA_R$"] * dias_restantes_equiv))
-        if r["MEDIA_DIA_R$"] is not None and not (isinstance(r["MEDIA_DIA_R$"], float) and pd.isna(r["MEDIA_DIA_R$"]))
-        else None,
-        axis=1,
-    )
-    prev_tbl["DIF_PREV_X_ANO1_R$"] = prev_tbl.apply(
-        lambda r: (r["PREVISAO_R$"] - r["ANO_1_R$"]) if r["PREVISAO_R$"] is not None and not (isinstance(r["PREVISAO_R$"], float) and pd.isna(r["PREVISAO_R$"])) else None,
-        axis=1,
-    )
-    prev_tbl["CRESC_%"] = prev_tbl.apply(
-        lambda r: (r["DIF_PREV_X_ANO1_R$"] / r["ANO_1_R$"] * 100) if r["ANO_1_R$"] not in (0, None) and r["DIF_PREV_X_ANO1_R$"] is not None and not (isinstance(r["DIF_PREV_X_ANO1_R$"] , float) and pd.isna(r["DIF_PREV_X_ANO1_R$"])) else None,
-        axis=1,
-    )
-    prev_tbl["DIF_PREV_X_META_R$"] = prev_tbl.apply(
-        lambda r: (r["PREVISAO_R$"] - r["META_R$"]) if r["PREVISAO_R$"] is not None and not (isinstance(r["PREVISAO_R$"], float) and pd.isna(r["PREVISAO_R$"])) else None,
-        axis=1,
-    )
-    prev_tbl["ATING_META_%"] = prev_tbl.apply(
-        lambda r: (r["PREVISAO_R$"] / r["META_R$"] * 100) if r["META_R$"] not in (0, None) and r["PREVISAO_R$"] is not None and not (isinstance(r["PREVISAO_R$"], float) and pd.isna(r["PREVISAO_R$"])) else None,
-        axis=1,
-    )
-
-    prev_tbl["LOJA"] = prev_tbl["LOJA_KEY"].map(lambda k: str(map_key_to_loja.get(k, k)))
-    prev_tbl["_LOJA_ORD"] = prev_tbl["LOJA_KEY"].map(lambda k: LOJA_KEY_RANK.get(k, DEFAULT_RANK)).astype(int)
-    prev_tbl = prev_tbl.sort_values(["_LOJA_ORD", "LOJA"]).drop(columns=["_LOJA_ORD"])
-
-    total_prev = {
-        "LOJA_KEY": "",
-        "LOJA": "TOTAL",
-        "REALIZADO_R$": float(prev_tbl["REALIZADO_R$"].sum()) if len(prev_tbl) else 0.0,
-        "DIAS_VENDA": float(dias_venda_equiv) if dias_venda_equiv is not None else 0.0,
-        "ANO_1_R$": float(prev_tbl["ANO_1_R$"].sum()) if len(prev_tbl) else 0.0,
-        "META_R$": float(prev_tbl["META_R$"].sum()) if len(prev_tbl) else 0.0,
-    }
-    total_prev["MEDIA_DIA_R$"] = (total_prev["REALIZADO_R$"] / total_prev["DIAS_VENDA"]) if total_prev["DIAS_VENDA"] != 0 else None
-    total_prev["PREVISAO_R$"] = (total_prev["REALIZADO_R$"] + (total_prev["MEDIA_DIA_R$"] * dias_restantes_equiv)) if total_prev["MEDIA_DIA_R$"] is not None else None
-    total_prev["DIF_PREV_X_ANO1_R$"] = (total_prev["PREVISAO_R$"] - total_prev["ANO_1_R$"]) if total_prev["PREVISAO_R$"] is not None else None
-    total_prev["CRESC_%"] = (total_prev["DIF_PREV_X_ANO1_R$"] / total_prev["ANO_1_R$"] * 100) if total_prev["ANO_1_R$"] not in (0, None) and total_prev["DIF_PREV_X_ANO1_R$"] is not None else None
-    total_prev["DIF_PREV_X_META_R$"] = (total_prev["PREVISAO_R$"] - total_prev["META_R$"]) if total_prev["PREVISAO_R$"] is not None else None
-    total_prev["ATING_META_%"] = (total_prev["PREVISAO_R$"] / total_prev["META_R$"] * 100) if total_prev["META_R$"] not in (0, None) and total_prev["PREVISAO_R$"] is not None else None
-
-    prev_tbl = pd.concat([prev_tbl, pd.DataFrame([total_prev])], ignore_index=True)
-
-    prev_view = prev_tbl[[
-        "LOJA",
-        "REALIZADO_R$",
-        "DIAS_VENDA",
-        "MEDIA_DIA_R$",
-        "PREVISAO_R$",
-        "ANO_1_R$",
-        "DIF_PREV_X_ANO1_R$",
-        "CRESC_%",
-        "META_R$",
-        "DIF_PREV_X_META_R$",
-        "ATING_META_%",
-    ]].copy()
-
-    prev_view_fmt = prev_view.copy()
-    prev_view_fmt["REALIZADO_R$"] = prev_view_fmt["REALIZADO_R$"].apply(lambda v: "R$ " + format_brl(v))
-    prev_view_fmt["DIAS_VENDA"] = prev_view_fmt["DIAS_VENDA"].apply(lambda v: format_decimal_pt(v, 1))
-    prev_view_fmt["MEDIA_DIA_R$"] = prev_view_fmt["MEDIA_DIA_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
-    prev_view_fmt["PREVISAO_R$"] = prev_view_fmt["PREVISAO_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
-    prev_view_fmt["ANO_1_R$"] = prev_view_fmt["ANO_1_R$"].apply(lambda v: "R$ " + format_brl(v))
-    prev_view_fmt["DIF_PREV_X_ANO1_R$"] = prev_view_fmt["DIF_PREV_X_ANO1_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
-    prev_view_fmt["CRESC_%"] = prev_view_fmt["CRESC_%"].apply(lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
-    prev_view_fmt["META_R$"] = prev_view_fmt["META_R$"].apply(lambda v: "R$ " + format_brl(v))
-    prev_view_fmt["DIF_PREV_X_META_R$"] = prev_view_fmt["DIF_PREV_X_META_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
-    prev_view_fmt["ATING_META_%"] = prev_view_fmt["ATING_META_%"].apply(lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
-
-    st.dataframe(prev_view_fmt, use_container_width=True, hide_index=True, height=520)
-
+    # RELATÓRIO PRINCIPAL — faturamento diário das lojas
+    st.markdown("### Faturamento diário por loja")
+    st.caption("Tabela gerencial com totalização, detalhamento por unidade e os filtros selecionados.")
     # ------------------------------------------------------------
     # Vendas Diárias por Loja — visão geral + drill por loja
     # Baseado no mesmo recorte/filtros ativos do dashboard.
     # ------------------------------------------------------------
-    st.markdown("### Vendas Diárias por Loja")
-    st.caption("Visão diária semelhante ao relatório do ERP, com uma matriz por loja e um drill individual por unidade.")
+
 
     vendas_dia_base = df_f.copy()
     vendas_dia_base = vendas_dia_base[vendas_dia_base["DATA"].notna()].copy()
@@ -2965,1150 +2702,1444 @@ with st.expander("Abrir Tabela Previsão de Fechamento"):
                 )
                 st.dataframe(sty_drill, use_container_width=True, hide_index=True, height=420)
 
-# ------------------------------------------------------------
-# Gráfico 2025 x 2026
-# ------------------------------------------------------------
-mensal_total = (
-    df_comp.groupby(["MES_NUM", "MES"], dropna=False)[["VENDAS_2025", "VENDAS_2026"]]
-    .sum()
-    .reset_index()
-    .sort_values("MES_NUM")
-)
+    # ------------------------------------------------------------
+    # Tabela Mês x Loja (drill)
+    # ------------------------------------------------------------
+    with st.expander("Abrir tabela comparativa Ano-1"):
+        base_tbl = df_comp[
+            ["MES", "MES_NUM", "LOJA", "LOJA_KEY", "VENDAS_2025", "VENDAS_2026", "VAR_R$", "VAR_%"]
+        ].copy()
 
-mensal_long = mensal_total.melt(
-    id_vars=["MES_NUM", "MES"],
-    value_vars=["VENDAS_2025", "VENDAS_2026"],
-    var_name="Ano",
-    value_name="Vendas",
-)
-mensal_long["Ano"] = mensal_long["Ano"].replace({"VENDAS_2025": str(ANO_BASE), "VENDAS_2026": str(ANO_ATUAL)})
+        base_tbl = base_tbl.sort_values(["LOJA_KEY", "MES_NUM"]).copy()
+        base_tbl["ACUM_DIF_R$"] = base_tbl.groupby("LOJA_KEY")["VAR_R$"].cumsum()
 
-fig_comp = px.line(
-    mensal_long,
-    x="MES",
-    y="Vendas",
-    color="Ano",
-    markers=True,
-    title=f"Vendas Mensais: {ANO_BASE} x {ANO_ATUAL} (Lojas do filtro)",
-)
-fig_comp.update_layout(yaxis_title="Vendas (R$)", xaxis_title="Mês")
-st.plotly_chart(fig_comp, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+        rows = []
+        total_acum = 0.0
 
-st.divider()
+        for mes_num, mes_nome in MESES:
+            bloco = base_tbl[base_tbl["MES_NUM"] == mes_num].copy()
+            if len(bloco) == 0:
+                continue
 
-# =========================
-# Linha 1: Loja + Marcas
-# =========================
-col1, col2 = st.columns([1.6, 1.0], gap="large")
+            bloco["_LOJA_ORD"] = bloco["LOJA_KEY"].map(lambda k: LOJA_KEY_RANK.get(k, DEFAULT_RANK)).astype(int)
+            bloco = bloco.sort_values(["_LOJA_ORD", "LOJA"]).drop(columns=["_LOJA_ORD"])
 
-with col1:
-    st.subheader("Faturamento por Loja")
+            for _, r in bloco.iterrows():
+                rows.append(
+                    {
+                        "MES": mes_nome,
+                        "LOJA": r["LOJA"],
+                        "2025 (R$)": r["VENDAS_2025"],
+                        "2026 (R$)": r["VENDAS_2026"],
+                        "Dif (R$)": r["VAR_R$"],
+                        "Dif (%)": r["VAR_%"],
+                        "Acum Dif (R$)": r["ACUM_DIF_R$"],
+                    }
+                )
 
-    vendas_loja = (
-        df_f.groupby("LOJA_N", dropna=False)["FAT_LINHA"]
-        .sum()
-        .reset_index()
-        .sort_values("FAT_LINHA", ascending=False)
-        .rename(columns={"LOJA_N": "LOJA", "FAT_LINHA": "Faturamento"})
-    )
+            sum_2025 = float(bloco["VENDAS_2025"].sum())
+            sum_2026 = float(bloco["VENDAS_2026"].sum())
+            sum_var = sum_2026 - sum_2025
+            sum_pct = (sum_var / sum_2025 * 100) if sum_2025 != 0 else None
 
-    fig_loja = px.bar(vendas_loja, x="LOJA", y="Faturamento", title="Vendas por Loja (QTD × UNIT)")
-    fig_loja.update_layout(xaxis_tickangle=-30, yaxis_title="Faturamento (R$)", xaxis_title="Loja")
-    st.plotly_chart(fig_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+            total_acum += sum_var
 
-    st.markdown(f"**Total (todas as lojas do filtro): R$ {format_brl(fat_total)}**")
+            rows.append(
+                {
+                    "MES": mes_nome,
+                    "LOJA": "TOTAL",
+                    "2025 (R$)": sum_2025,
+                    "2026 (R$)": sum_2026,
+                    "Dif (R$)": sum_var,
+                    "Dif (%)": sum_pct,
+                    "Acum Dif (R$)": total_acum,
+                }
+            )
 
-    tbl_loja = vendas_loja.copy()
-    tbl_loja["Faturamento (R$)"] = tbl_loja["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-    st.dataframe(tbl_loja[["LOJA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=260)
+        df_tbl = pd.DataFrame(rows)
+        df_tbl_disp = month_block_style(df_tbl)
 
-with col2:
-    st.subheader("Top 10 Marcas por Faturamento")
-
-    marcas = (
-        df_f.groupby("MARCA_N", dropna=False)["FAT_LINHA"]
-        .sum()
-        .reset_index()
-        .sort_values("FAT_LINHA", ascending=False)
-        .rename(columns={"MARCA_N": "MARCA", "FAT_LINHA": "Faturamento"})
-    )
-
-    total_ref = fat_total if fat_total != 0 else 1.0
-    marcas["% do Total"] = (marcas["Faturamento"] / total_ref) * 100
-
-    top10 = marcas.head(10).copy()
-    top10["Faturamento (R$)"] = top10["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-    top10["% do Total"] = top10["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-
-    st.dataframe(top10[["MARCA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=360)
-
-    with st.expander("Ver todas as marcas (drill)"):
-        full = marcas.copy()
-        full["Faturamento (R$)"] = full["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-        full["% do Total"] = full["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-        st.dataframe(full[["MARCA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=520)
-
-
-# ============================================================
-# KPI: Marca → Linhas → Produtos
-# ============================================================
-st.subheader("KPI: Marca → Linhas → Produtos")
-
-marcas_disp = sorted([x for x in df_f["MARCA_N"].dropna().astype(str).unique() if str(x).strip() != ""])
-marca_opts = ["(Todos)"] + marcas_disp
-
-if "marca_kpi_sel" not in st.session_state:
-    st.session_state["marca_kpi_sel"] = "(Todos)"
-
-marca_sel = st.selectbox("Marca (KPI)", options=marca_opts, index=marca_opts.index(st.session_state["marca_kpi_sel"]) if st.session_state["marca_kpi_sel"] in marca_opts else 0, key="marca_kpi_select")
-st.session_state["marca_kpi_sel"] = marca_sel
-
-if marca_sel == "(Todos)":
-    df_marca = df_f.copy()
-else:
-    df_marca = df_f[df_f["MARCA_N"] == marca_sel].copy()
-
-# Totais do recorte
-val_total_marca = float(df_marca[VAL_COL].sum()) if len(df_marca) else 0.0
-qtd_total_marca = float(df_marca["QTD_NUM"].sum()) if (len(df_marca) and "QTD_NUM" in df_marca.columns) else 0.0
-
-km1, km2 = st.columns(2)
-with km1:
-    st.metric("Valor (R$)", "R$ " + format_brl(val_total_marca))
-with km2:
-    st.metric("Quantidade (QTD)", format_brl(qtd_total_marca))
-
-# Linhas da marca
-linhas_marca = (
-    df_marca.groupby("LINHA_N", dropna=False)
-    .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
-    .reset_index()
-    .rename(columns={"LINHA_N": "LINHA"})
-    .sort_values("VALOR", ascending=False)
-)
-
-linhas_view = linhas_marca.copy()
-linhas_view["VALOR (R$)"] = linhas_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
-linhas_view["QTD"] = linhas_view["QTD"].apply(lambda v: format_brl(v))
-
-st.markdown("#### Linhas (da marca selecionada)")
-st.dataframe(linhas_view[["LINHA", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=420)
-
-# Produtos da marca (CÓD + Descrição)
-with st.expander("Ver produtos (CÓD + Descrição)"):
-    if ("COD_N" not in df_marca.columns) or ("DESC_CANON_N" not in df_marca.columns):
-        st.info("Colunas de produto (CÓD / Descrição) não foram encontradas no Excel.")
-    else:
-        prod = (
-            df_marca.groupby(["COD_N", "DESC_CANON_N"], dropna=False)
-            .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
-            .reset_index()
-            .rename(columns={"COD_N": "CÓD", "DESC_CANON_N": "DESCRIÇÃO"})
-            .sort_values("VALOR", ascending=False)
+        styler_tbl = (
+            df_tbl_disp.style
+            .apply(
+                lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
+                if str(row.get("LOJA", "")).upper() == "TOTAL"
+                else [""] * len(row),
+                axis=1,
+            )
+            .format(
+                {
+                    "2025 (R$)": lambda v: "R$ " + format_brl(v),
+                    "2026 (R$)": lambda v: "R$ " + format_brl(v),
+                    "Dif (R$)": lambda v: "R$ " + format_brl(v),
+                    "Dif (%)": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
+                    "Acum Dif (R$)": lambda v: "R$ " + format_brl(v),
+                }
+            )
+            .pipe(lambda s: styler_map_compat(s, color_pos_neg, subset=["Dif (R$)", "Dif (%)", "Acum Dif (R$)"]))
         )
-        prod_view = prod.copy()
-        prod_view["VALOR (R$)"] = prod_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
-        prod_view["QTD"] = prod_view["QTD"].apply(lambda v: format_brl(v))
-        st.dataframe(prod_view[["CÓD", "DESCRIÇÃO", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=520)
 
-st.subheader("Indicador: Marcas × Loja")
+        st.dataframe(styler_tbl, use_container_width=True, hide_index=True, height=560)
 
-marcas_mxl = sorted([x for x in df_f["MARCA_N"].dropna().astype(str).unique() if str(x).strip() != ""])
 
-# O seletor de marcas fica em um formulário próprio. Assim, marcar/desmarcar
-# opções não provoca o recálculo de todo o dashboard a cada clique.
-# Somente o botão abaixo aplica a seleção e executa os agrupamentos pesados.
-marcas_aplicadas_anteriores = [
-    m for m in st.session_state.get("marcas_x_loja_aplicadas", [])
-    if m in marcas_mxl
-]
-with st.form("form_marcas_x_loja", clear_on_submit=False):
-    marcas_escolhidas_mxl = st.multiselect(
-        "Selecione uma ou mais marcas",
-        options=marcas_mxl,
-        default=marcas_aplicadas_anteriores,
-        key="marcas_x_loja_widget",
-    )
-    aplicar_marcas_mxl = st.form_submit_button(
-        "Aplicar marcas",
-        use_container_width=True,
-        type="primary",
-    )
-
-if aplicar_marcas_mxl:
-    st.session_state["marcas_x_loja_aplicadas"] = list(marcas_escolhidas_mxl)
-
-marcas_sel_mxl = [
-    m for m in st.session_state.get("marcas_x_loja_aplicadas", [])
-    if m in marcas_mxl
-]
-
-if len(marcas_sel_mxl) == 0:
-    st.info("Selecione ao menos uma marca para ver o ranking das lojas, as linhas e os produtos.")
-else:
-    df_mxl = df_f.loc[df_f["MARCA_N"].isin(marcas_sel_mxl)]
-
-    c_mxl_1, c_mxl_2 = st.columns([1.1, 1.2], gap="large")
-
-    with c_mxl_1:
-        lojas_mxl = (
-            df_mxl.groupby("LOJA_N", dropna=False)[VAL_COL]
+        # ------------------------------------------------------------
+        # Tabela Meta x Realizado (drill)
+        # ------------------------------------------------------------
+    with st.expander("Abrir Tabela Meta x Realizado"):
+        # Meta e Realizado por loja no recorte selecionado (meses + filtros de loja + período)
+        # Meta vem do dicionário fixo; Realizado vem do Excel (ANO_ATUAL) no mesmo recorte.
+        meta_loja = (
+            df_meta_sel.groupby("LOJA_KEY", dropna=False)["META"]
             .sum()
             .reset_index()
-            .rename(columns={"LOJA_N": "LOJA", VAL_COL: "Faturamento"})
-            .sort_values("Faturamento", ascending=False)
+            .rename(columns={"META": "META_R$"})
         )
-        lojas_mxl_view = lojas_mxl.copy()
-        lojas_mxl_view["Faturamento (R$)"] = lojas_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-        st.markdown("#### Ranking das Lojas")
-        st.dataframe(lojas_mxl_view[["LOJA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=360)
 
-    with c_mxl_2:
-        fig_mxl = px.bar(
-            lojas_mxl.head(15),
-            x="Faturamento",
-            y="LOJA",
-            orientation="h",
-            title="Faturamento por Loja das Marcas Selecionadas",
+        real_loja = (
+            df_mes.groupby("LOJA_KEY", dropna=False)["VENDAS_2026"]
+            .sum()
+            .reset_index()
+            .rename(columns={"VENDAS_2026": "REALIZADO_R$"})
         )
-        fig_mxl.update_layout(
-            yaxis={"categoryorder": "total ascending"},
-            xaxis_title="Faturamento (R$)",
-            yaxis_title="Loja",
-        )
-        st.plotly_chart(fig_mxl, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
-    st.markdown("#### Ranking de Vendedores")
-    vendedores_mxl = (
-        df_mxl.groupby("VENDEDOR_N", dropna=False)[VAL_COL]
+        mkp_tbl = meta_loja.merge(real_loja, on="LOJA_KEY", how="outer").fillna(0.0)
+
+        # Nome da loja
+        mkp_tbl["LOJA"] = mkp_tbl["LOJA_KEY"].map(lambda k: str(map_key_to_loja.get(k, k)))
+
+        mkp_tbl["DIF_R$"] = mkp_tbl["REALIZADO_R$"] - mkp_tbl["META_R$"]
+        mkp_tbl["% ATINGIDO"] = mkp_tbl.apply(
+            lambda r: (r["REALIZADO_R$"] / r["META_R$"] * 100) if r["META_R$"] not in (0, None) else None,
+            axis=1,
+        )
+
+        # Ordena lojas (mesma ordem usada no comparativo)
+        mkp_tbl["_LOJA_ORD"] = mkp_tbl["LOJA_KEY"].map(lambda k: LOJA_KEY_RANK.get(k, DEFAULT_RANK)).astype(int)
+        mkp_tbl = mkp_tbl.sort_values(["_LOJA_ORD", "LOJA"]).drop(columns=["_LOJA_ORD"])
+
+        # Linha TOTAL
+        t_meta = float(mkp_tbl["META_R$"].sum()) if len(mkp_tbl) else 0.0
+        t_real = float(mkp_tbl["REALIZADO_R$"].sum()) if len(mkp_tbl) else 0.0
+        t_dif = t_real - t_meta
+        t_pct = (t_real / t_meta * 100) if t_meta != 0 else None
+
+        mkp_tbl = pd.concat(
+            [
+                mkp_tbl,
+                pd.DataFrame(
+                    [
+                        {
+                            "LOJA_KEY": "",
+                            "LOJA": "TOTAL",
+                            "META_R$": t_meta,
+                            "REALIZADO_R$": t_real,
+                            "DIF_R$": t_dif,
+                            "% ATINGIDO": t_pct,
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+
+        view = mkp_tbl[["LOJA", "META_R$", "REALIZADO_R$", "DIF_R$", "% ATINGIDO"]].copy()
+
+        sty = (
+            view.style
+            .apply(lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
+            .format(
+                {
+                    "META_R$": lambda v: "R$ " + format_brl(v),
+                    "REALIZADO_R$": lambda v: "R$ " + format_brl(v),
+                    "DIF_R$": lambda v: "R$ " + format_brl(v),
+                    "% ATINGIDO": lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—",
+                }
+            )
+            .pipe(lambda s: styler_map_compat(s, color_pos_neg, subset=["DIF_R$", "% ATINGIDO"]))
+        )
+
+        st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
+
+    with st.expander("Abrir Tabela Previsão de Fechamento"):
+        st.markdown("### Previsão de Fechamento por Loja")
+
+        # ------------------------------------------------------------
+        # Tabela de Previsão de Fechamento (drill)
+        # ------------------------------------------------------------
+        prev_base = df_2026.copy()
+        prev_base = prev_base[prev_base["MES_NUM"].isin(mes_nums_sel)].copy()
+
+        # Usa o mesmo contador de dias comerciais válidos para todas as lojas.
+        # Se apenas uma loja vendeu zero em um dia útil, esse dia continua contando;
+        # só sai do calendário quando a empresa inteira ficou sem venda.
+        lojas_prev_lista = sorted(set(prev_base["LOJA_KEY"].dropna().tolist()) | set(df_mes["LOJA_KEY"].dropna().tolist()) | set(df_meta_sel["LOJA_KEY"].dropna().tolist()))
+        dias_loja = pd.DataFrame({
+            "LOJA_KEY": lojas_prev_lista,
+            "DIAS_VENDA": [dias_venda_equiv] * len(lojas_prev_lista),
+        })
+
+        realizado_loja = (
+            df_mes.groupby("LOJA_KEY", dropna=False)["VENDAS_2026"]
+            .sum()
+            .reset_index(name="REALIZADO_R$")
+        )
+
+        ano1_loja = (
+            df_mes.groupby("LOJA_KEY", dropna=False)["VENDAS_2025"]
+            .sum()
+            .reset_index(name="ANO_1_R$")
+        )
+
+        meta_prev_loja = (
+            df_meta_sel.groupby("LOJA_KEY", dropna=False)["META"]
+            .sum()
+            .reset_index(name="META_R$")
+        )
+
+        base_lojas_prev = pd.DataFrame({"LOJA_KEY": sorted(set(df_meta_sel["LOJA_KEY"].dropna().tolist()) | set(df_mes["LOJA_KEY"].dropna().tolist()))})
+        prev_tbl = base_lojas_prev.merge(realizado_loja, on="LOJA_KEY", how="left")
+        prev_tbl = prev_tbl.merge(dias_loja, on="LOJA_KEY", how="left")
+        prev_tbl = prev_tbl.merge(ano1_loja, on="LOJA_KEY", how="left")
+        prev_tbl = prev_tbl.merge(meta_prev_loja, on="LOJA_KEY", how="left")
+        prev_tbl[["REALIZADO_R$", "DIAS_VENDA", "ANO_1_R$", "META_R$"]] = prev_tbl[["REALIZADO_R$", "DIAS_VENDA", "ANO_1_R$", "META_R$"]].fillna(0.0)
+
+        prev_tbl["MEDIA_DIA_R$"] = prev_tbl.apply(
+            lambda r: (r["REALIZADO_R$"] / r["DIAS_VENDA"]) if r["DIAS_VENDA"] not in (0, None) else None,
+            axis=1,
+        )
+        prev_tbl["PREVISAO_R$"] = prev_tbl.apply(
+            lambda r: (r["REALIZADO_R$"] + (r["MEDIA_DIA_R$"] * dias_restantes_equiv))
+            if r["MEDIA_DIA_R$"] is not None and not (isinstance(r["MEDIA_DIA_R$"], float) and pd.isna(r["MEDIA_DIA_R$"]))
+            else None,
+            axis=1,
+        )
+        prev_tbl["DIF_PREV_X_ANO1_R$"] = prev_tbl.apply(
+            lambda r: (r["PREVISAO_R$"] - r["ANO_1_R$"]) if r["PREVISAO_R$"] is not None and not (isinstance(r["PREVISAO_R$"], float) and pd.isna(r["PREVISAO_R$"])) else None,
+            axis=1,
+        )
+        prev_tbl["CRESC_%"] = prev_tbl.apply(
+            lambda r: (r["DIF_PREV_X_ANO1_R$"] / r["ANO_1_R$"] * 100) if r["ANO_1_R$"] not in (0, None) and r["DIF_PREV_X_ANO1_R$"] is not None and not (isinstance(r["DIF_PREV_X_ANO1_R$"] , float) and pd.isna(r["DIF_PREV_X_ANO1_R$"])) else None,
+            axis=1,
+        )
+        prev_tbl["DIF_PREV_X_META_R$"] = prev_tbl.apply(
+            lambda r: (r["PREVISAO_R$"] - r["META_R$"]) if r["PREVISAO_R$"] is not None and not (isinstance(r["PREVISAO_R$"], float) and pd.isna(r["PREVISAO_R$"])) else None,
+            axis=1,
+        )
+        prev_tbl["ATING_META_%"] = prev_tbl.apply(
+            lambda r: (r["PREVISAO_R$"] / r["META_R$"] * 100) if r["META_R$"] not in (0, None) and r["PREVISAO_R$"] is not None and not (isinstance(r["PREVISAO_R$"], float) and pd.isna(r["PREVISAO_R$"])) else None,
+            axis=1,
+        )
+
+        prev_tbl["LOJA"] = prev_tbl["LOJA_KEY"].map(lambda k: str(map_key_to_loja.get(k, k)))
+        prev_tbl["_LOJA_ORD"] = prev_tbl["LOJA_KEY"].map(lambda k: LOJA_KEY_RANK.get(k, DEFAULT_RANK)).astype(int)
+        prev_tbl = prev_tbl.sort_values(["_LOJA_ORD", "LOJA"]).drop(columns=["_LOJA_ORD"])
+
+        total_prev = {
+            "LOJA_KEY": "",
+            "LOJA": "TOTAL",
+            "REALIZADO_R$": float(prev_tbl["REALIZADO_R$"].sum()) if len(prev_tbl) else 0.0,
+            "DIAS_VENDA": float(dias_venda_equiv) if dias_venda_equiv is not None else 0.0,
+            "ANO_1_R$": float(prev_tbl["ANO_1_R$"].sum()) if len(prev_tbl) else 0.0,
+            "META_R$": float(prev_tbl["META_R$"].sum()) if len(prev_tbl) else 0.0,
+        }
+        total_prev["MEDIA_DIA_R$"] = (total_prev["REALIZADO_R$"] / total_prev["DIAS_VENDA"]) if total_prev["DIAS_VENDA"] != 0 else None
+        total_prev["PREVISAO_R$"] = (total_prev["REALIZADO_R$"] + (total_prev["MEDIA_DIA_R$"] * dias_restantes_equiv)) if total_prev["MEDIA_DIA_R$"] is not None else None
+        total_prev["DIF_PREV_X_ANO1_R$"] = (total_prev["PREVISAO_R$"] - total_prev["ANO_1_R$"]) if total_prev["PREVISAO_R$"] is not None else None
+        total_prev["CRESC_%"] = (total_prev["DIF_PREV_X_ANO1_R$"] / total_prev["ANO_1_R$"] * 100) if total_prev["ANO_1_R$"] not in (0, None) and total_prev["DIF_PREV_X_ANO1_R$"] is not None else None
+        total_prev["DIF_PREV_X_META_R$"] = (total_prev["PREVISAO_R$"] - total_prev["META_R$"]) if total_prev["PREVISAO_R$"] is not None else None
+        total_prev["ATING_META_%"] = (total_prev["PREVISAO_R$"] / total_prev["META_R$"] * 100) if total_prev["META_R$"] not in (0, None) and total_prev["PREVISAO_R$"] is not None else None
+
+        prev_tbl = pd.concat([prev_tbl, pd.DataFrame([total_prev])], ignore_index=True)
+
+        prev_view = prev_tbl[[
+            "LOJA",
+            "REALIZADO_R$",
+            "DIAS_VENDA",
+            "MEDIA_DIA_R$",
+            "PREVISAO_R$",
+            "ANO_1_R$",
+            "DIF_PREV_X_ANO1_R$",
+            "CRESC_%",
+            "META_R$",
+            "DIF_PREV_X_META_R$",
+            "ATING_META_%",
+        ]].copy()
+
+        prev_view_fmt = prev_view.copy()
+        prev_view_fmt["REALIZADO_R$"] = prev_view_fmt["REALIZADO_R$"].apply(lambda v: "R$ " + format_brl(v))
+        prev_view_fmt["DIAS_VENDA"] = prev_view_fmt["DIAS_VENDA"].apply(lambda v: format_decimal_pt(v, 1))
+        prev_view_fmt["MEDIA_DIA_R$"] = prev_view_fmt["MEDIA_DIA_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+        prev_view_fmt["PREVISAO_R$"] = prev_view_fmt["PREVISAO_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+        prev_view_fmt["ANO_1_R$"] = prev_view_fmt["ANO_1_R$"].apply(lambda v: "R$ " + format_brl(v))
+        prev_view_fmt["DIF_PREV_X_ANO1_R$"] = prev_view_fmt["DIF_PREV_X_ANO1_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+        prev_view_fmt["CRESC_%"] = prev_view_fmt["CRESC_%"].apply(lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+        prev_view_fmt["META_R$"] = prev_view_fmt["META_R$"].apply(lambda v: "R$ " + format_brl(v))
+        prev_view_fmt["DIF_PREV_X_META_R$"] = prev_view_fmt["DIF_PREV_X_META_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+        prev_view_fmt["ATING_META_%"] = prev_view_fmt["ATING_META_%"].apply(lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
+
+        st.dataframe(prev_view_fmt, use_container_width=True, hide_index=True, height=520)
+
+
+    # ------------------------------------------------------------
+    # Gráfico 2025 x 2026
+    # ------------------------------------------------------------
+    mensal_total = (
+        df_comp.groupby(["MES_NUM", "MES"], dropna=False)[["VENDAS_2025", "VENDAS_2026"]]
         .sum()
         .reset_index()
-        .rename(columns={"VENDEDOR_N": "VENDEDOR", VAL_COL: "Faturamento"})
-        .sort_values("Faturamento", ascending=False)
+        .sort_values("MES_NUM")
     )
-    vendedores_mxl_view = vendedores_mxl.copy()
-    vendedores_mxl_view["Faturamento (R$)"] = vendedores_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-    st.dataframe(vendedores_mxl_view[["VENDEDOR", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=320)
 
-    linhas_mxl = (
-        df_mxl.groupby("LINHA_N", dropna=False)[VAL_COL]
-        .sum()
+    mensal_long = mensal_total.melt(
+        id_vars=["MES_NUM", "MES"],
+        value_vars=["VENDAS_2025", "VENDAS_2026"],
+        var_name="Ano",
+        value_name="Vendas",
+    )
+    mensal_long["Ano"] = mensal_long["Ano"].replace({"VENDAS_2025": str(ANO_BASE), "VENDAS_2026": str(ANO_ATUAL)})
+
+    fig_comp = px.line(
+        mensal_long,
+        x="MES",
+        y="Vendas",
+        color="Ano",
+        markers=True,
+        title=f"Vendas Mensais: {ANO_BASE} x {ANO_ATUAL} (Lojas do filtro)",
+    )
+    fig_comp.update_layout(yaxis_title="Vendas (R$)", xaxis_title="Mês")
+    st.plotly_chart(fig_comp, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+    st.divider()
+
+with aba_vendas:
+    st.markdown("#### Performance comercial")
+
+    # =========================
+    # Linha 1: Loja + Marcas
+    # =========================
+    col1, col2 = st.columns([1.6, 1.0], gap="large")
+
+    with col1:
+        st.subheader("Faturamento por Loja")
+
+        vendas_loja = (
+            df_f.groupby("LOJA_N", dropna=False)["FAT_LINHA"]
+            .sum()
+            .reset_index()
+            .sort_values("FAT_LINHA", ascending=False)
+            .rename(columns={"LOJA_N": "LOJA", "FAT_LINHA": "Faturamento"})
+        )
+
+        fig_loja = px.bar(vendas_loja, x="LOJA", y="Faturamento", title="Vendas por Loja (QTD × UNIT)")
+        fig_loja.update_layout(xaxis_tickangle=-30, yaxis_title="Faturamento (R$)", xaxis_title="Loja")
+        st.plotly_chart(fig_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+        st.markdown(f"**Total (todas as lojas do filtro): R$ {format_brl(fat_total)}**")
+
+        tbl_loja = vendas_loja.copy()
+        tbl_loja["Faturamento (R$)"] = tbl_loja["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+        st.dataframe(tbl_loja[["LOJA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=260)
+
+    with col2:
+        st.subheader("Top 10 Marcas por Faturamento")
+
+        marcas = (
+            df_f.groupby("MARCA_N", dropna=False)["FAT_LINHA"]
+            .sum()
+            .reset_index()
+            .sort_values("FAT_LINHA", ascending=False)
+            .rename(columns={"MARCA_N": "MARCA", "FAT_LINHA": "Faturamento"})
+        )
+
+        total_ref = fat_total if fat_total != 0 else 1.0
+        marcas["% do Total"] = (marcas["Faturamento"] / total_ref) * 100
+
+        top10 = marcas.head(10).copy()
+        top10["Faturamento (R$)"] = top10["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+        top10["% do Total"] = top10["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+
+        st.dataframe(top10[["MARCA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=360)
+
+        with st.expander("Ver todas as marcas (drill)"):
+            full = marcas.copy()
+            full["Faturamento (R$)"] = full["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+            full["% do Total"] = full["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+            st.dataframe(full[["MARCA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=520)
+
+
+with aba_marcas:
+    st.markdown("#### Exploração de portfólio")
+
+    # ============================================================
+    # KPI: Marca → Linhas → Produtos
+    # ============================================================
+    st.subheader("KPI: Marca → Linhas → Produtos")
+
+    marcas_disp = sorted([x for x in df_f["MARCA_N"].dropna().astype(str).unique() if str(x).strip() != ""])
+    marca_opts = ["(Todos)"] + marcas_disp
+
+    if "marca_kpi_sel" not in st.session_state:
+        st.session_state["marca_kpi_sel"] = "(Todos)"
+
+    marca_sel = st.selectbox("Marca (KPI)", options=marca_opts, index=marca_opts.index(st.session_state["marca_kpi_sel"]) if st.session_state["marca_kpi_sel"] in marca_opts else 0, key="marca_kpi_select")
+    st.session_state["marca_kpi_sel"] = marca_sel
+
+    if marca_sel == "(Todos)":
+        df_marca = df_f.copy()
+    else:
+        df_marca = df_f[df_f["MARCA_N"] == marca_sel].copy()
+
+    # Totais do recorte
+    val_total_marca = float(df_marca[VAL_COL].sum()) if len(df_marca) else 0.0
+    qtd_total_marca = float(df_marca["QTD_NUM"].sum()) if (len(df_marca) and "QTD_NUM" in df_marca.columns) else 0.0
+
+    km1, km2 = st.columns(2)
+    with km1:
+        st.metric("Valor (R$)", "R$ " + format_brl(val_total_marca))
+    with km2:
+        st.metric("Quantidade (QTD)", format_brl(qtd_total_marca))
+
+    # Linhas da marca
+    linhas_marca = (
+        df_marca.groupby("LINHA_N", dropna=False)
+        .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
         .reset_index()
-        .rename(columns={"LINHA_N": "LINHA", VAL_COL: "Faturamento"})
-        .sort_values("Faturamento", ascending=False)
+        .rename(columns={"LINHA_N": "LINHA"})
+        .sort_values("VALOR", ascending=False)
     )
-    linhas_mxl_view = linhas_mxl.copy()
-    linhas_mxl_view["Faturamento (R$)"] = linhas_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
 
-    lm1, lm2 = st.columns([1.1, 1.3], gap="large")
-    with lm1:
-        st.markdown("#### Linhas das Marcas Selecionadas")
-        st.dataframe(linhas_mxl_view[["LINHA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=360)
+    linhas_view = linhas_marca.copy()
+    linhas_view["VALOR (R$)"] = linhas_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
+    linhas_view["QTD"] = linhas_view["QTD"].apply(lambda v: format_brl(v))
 
-    with lm2:
-        linhas_opts_mxl = linhas_mxl["LINHA"].tolist()
-        linha_sel_mxl = st.selectbox(
-            "Selecione a linha para detalhar os produtos",
-            options=linhas_opts_mxl,
-            index=0 if len(linhas_opts_mxl) else None,
-            key="linha_sel_marcas_x_loja",
-        ) if len(linhas_opts_mxl) else None
+    st.markdown("#### Linhas (da marca selecionada)")
+    st.dataframe(linhas_view[["LINHA", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=420)
 
-        if linha_sel_mxl is not None:
-            df_prod_mxl = df_mxl[df_mxl["LINHA_N"] == linha_sel_mxl].copy()
-            prod_mxl = (
-                df_prod_mxl.groupby(["COD_N", "DESC_CANON_N"], dropna=False)
+    # Produtos da marca (CÓD + Descrição)
+    with st.expander("Ver produtos (CÓD + Descrição)"):
+        if ("COD_N" not in df_marca.columns) or ("DESC_CANON_N" not in df_marca.columns):
+            st.info("Colunas de produto (CÓD / Descrição) não foram encontradas no Excel.")
+        else:
+            prod = (
+                df_marca.groupby(["COD_N", "DESC_CANON_N"], dropna=False)
                 .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
                 .reset_index()
                 .rename(columns={"COD_N": "CÓD", "DESC_CANON_N": "DESCRIÇÃO"})
                 .sort_values("VALOR", ascending=False)
             )
-            prod_mxl_view = prod_mxl.copy()
-            prod_mxl_view["VALOR (R$)"] = prod_mxl_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
-            prod_mxl_view["QTD"] = prod_mxl_view["QTD"].apply(lambda v: format_brl(v))
-            st.markdown(f"#### Produtos da Linha: {linha_sel_mxl}")
-            st.dataframe(prod_mxl_view[["CÓD", "DESCRIÇÃO", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=360)
+            prod_view = prod.copy()
+            prod_view["VALOR (R$)"] = prod_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
+            prod_view["QTD"] = prod_view["QTD"].apply(lambda v: format_brl(v))
+            st.dataframe(prod_view[["CÓD", "DESCRIÇÃO", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=520)
 
-st.divider()
+    st.subheader("Indicador: Marcas × Loja")
 
-# =========================
-# Linha 2: Vendedor + Segmento
-# =========================
-col3, col4 = st.columns([1.4, 1.0], gap="large")
+    marcas_mxl = sorted([x for x in df_f["MARCA_N"].dropna().astype(str).unique() if str(x).strip() != ""])
 
-with col3:
-    st.subheader("Ranking de Vendas por Vendedor")
+    # O seletor de marcas fica em um formulário próprio. Assim, marcar/desmarcar
+    # opções não provoca o recálculo de todo o dashboard a cada clique.
+    # Somente o botão abaixo aplica a seleção e executa os agrupamentos pesados.
+    marcas_aplicadas_anteriores = [
+        m for m in st.session_state.get("marcas_x_loja_aplicadas", [])
+        if m in marcas_mxl
+    ]
+    with st.form("form_marcas_x_loja", clear_on_submit=False):
+        marcas_escolhidas_mxl = st.multiselect(
+            "Selecione uma ou mais marcas",
+            options=marcas_mxl,
+            default=marcas_aplicadas_anteriores,
+            key="marcas_x_loja_widget",
+        )
+        aplicar_marcas_mxl = st.form_submit_button(
+            "Aplicar marcas",
+            use_container_width=True,
+            type="primary",
+        )
 
-    vendedores = (
-        df_f.groupby("VENDEDOR_N", dropna=False)["FAT_LINHA"]
-        .sum()
-        .reset_index()
-        .sort_values("FAT_LINHA", ascending=False)
-        .rename(columns={"VENDEDOR_N": "VENDEDOR", "FAT_LINHA": "Faturamento"})
-    )
+    if aplicar_marcas_mxl:
+        st.session_state["marcas_x_loja_aplicadas"] = list(marcas_escolhidas_mxl)
 
-    fig_vend = px.bar(
-        vendedores.head(15),
-        x="Faturamento",
-        y="VENDEDOR",
-        orientation="h",
-        title="Top Vendedores (QTD × UNIT)",
-    )
-    fig_vend.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="Faturamento (R$)", yaxis_title="Vendedor")
-    st.plotly_chart(fig_vend, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+    marcas_sel_mxl = [
+        m for m in st.session_state.get("marcas_x_loja_aplicadas", [])
+        if m in marcas_mxl
+    ]
 
-    with st.expander("Ver todos os vendedores"):
-        vend_full = vendedores.copy()
-        vend_full["Faturamento (R$)"] = vend_full["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-        st.dataframe(vend_full[["VENDEDOR", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=520)
+    if len(marcas_sel_mxl) == 0:
+        st.info("Selecione ao menos uma marca para ver o ranking das lojas, as linhas e os produtos.")
+    else:
+        df_mxl = df_f.loc[df_f["MARCA_N"].isin(marcas_sel_mxl)]
 
-    # ============================================================
-    # ✅ TABELA MARKUP (OCULTA EM DRILL)
-    # ============================================================
-    with st.expander("Abrir tabela: Faturamento × Custo TT + ST × Markup (por Vendedor)"):
-        df_tmp = df_f.copy()
-        df_tmp = df_tmp[df_tmp["FAT_LINHA"].notna()].copy()
+        c_mxl_1, c_mxl_2 = st.columns([1.1, 1.2], gap="large")
 
-        if "CUSTO_ST_NUM" not in df_tmp.columns or (df_tmp["CUSTO_ST_NUM"].notna().sum() == 0):
-            st.info("Coluna **CUSTO TT + ST** não encontrada (ou sem valores) no Excel para o recorte filtrado.")
-        else:
-            vend_mkp = (
-                df_tmp.groupby("VENDEDOR_N", dropna=False)[["FAT_LINHA", "CUSTO_ST_NUM"]]
+        with c_mxl_1:
+            lojas_mxl = (
+                df_mxl.groupby("LOJA_N", dropna=False)[VAL_COL]
                 .sum()
                 .reset_index()
-                .rename(columns={"VENDEDOR_N": "VENDEDOR", "FAT_LINHA": "Faturamento", "CUSTO_ST_NUM": "Custo TT + ST"})
+                .rename(columns={"LOJA_N": "LOJA", VAL_COL: "Faturamento"})
+                .sort_values("Faturamento", ascending=False)
             )
+            lojas_mxl_view = lojas_mxl.copy()
+            lojas_mxl_view["Faturamento (R$)"] = lojas_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+            st.markdown("#### Ranking das Lojas")
+            st.dataframe(lojas_mxl_view[["LOJA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=360)
 
-            vend_mkp["MARKUP"] = vend_mkp.apply(
-                lambda r: (r["Faturamento"] / r["Custo TT + ST"])
-                if (r["Custo TT + ST"] not in (0, None) and not (isinstance(r["Custo TT + ST"], float) and pd.isna(r["Custo TT + ST"])))
-                else None,
-                axis=1,
+        with c_mxl_2:
+            fig_mxl = px.bar(
+                lojas_mxl.head(15),
+                x="Faturamento",
+                y="LOJA",
+                orientation="h",
+                title="Faturamento por Loja das Marcas Selecionadas",
             )
-
-            vend_mkp = vend_mkp.sort_values("Faturamento", ascending=False).copy()
-
-            tot_fat = float(vend_mkp["Faturamento"].sum()) if len(vend_mkp) else 0.0
-            tot_cus = float(vend_mkp["Custo TT + ST"].sum()) if len(vend_mkp) else 0.0
-            tot_mkp = (tot_fat / tot_cus) if tot_cus not in (0, None) else None
-
-            vend_disp = vend_mkp.copy()
-            vend_disp["Faturamento (R$)"] = vend_disp["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-            vend_disp["Custo TT + ST (R$)"] = vend_disp["Custo TT + ST"].apply(lambda v: "R$ " + format_brl(v))
-            vend_disp["Markup"] = vend_disp["MARKUP"].apply(
-                lambda v: (f"{v:.2f}x".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—"
+            fig_mxl.update_layout(
+                yaxis={"categoryorder": "total ascending"},
+                xaxis_title="Faturamento (R$)",
+                yaxis_title="Loja",
             )
+            st.plotly_chart(fig_mxl, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
-            vend_disp_tot = pd.concat(
-                [
-                    vend_disp[["VENDEDOR", "Faturamento (R$)", "Custo TT + ST (R$)", "Markup"]],
-                    pd.DataFrame([{
-                        "VENDEDOR": "TOTAL",
-                        "Faturamento (R$)": "R$ " + format_brl(tot_fat),
-                        "Custo TT + ST (R$)": "R$ " + format_brl(tot_cus),
-                        "Markup": (f"{tot_mkp:.2f}x".replace(".", ",")) if tot_mkp is not None else "—",
-                    }]),
-                ],
-                ignore_index=True,
-            )
-
-            st.dataframe(vend_disp_tot, use_container_width=True, hide_index=True, height=360)
-
-with col4:
-    st.subheader("Faturamento por Segmento")
-
-    segmento = (
-        df_f.groupby("SEGMENTO_N", dropna=False)["FAT_LINHA"]
-        .sum()
-        .reset_index()
-        .sort_values("FAT_LINHA", ascending=False)
-        .rename(columns={"SEGMENTO_N": "SEGMENTO", "FAT_LINHA": "Faturamento"})
-    )
-
-    fig_seg = px.pie(segmento, names="SEGMENTO", values="Faturamento", title="Participação por Segmento (QTD × UNIT)")
-    st.plotly_chart(fig_seg, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
-
-    segmento_tbl = segmento.copy()
-    segmento_tbl["Faturamento (R$)"] = segmento_tbl["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-    st.dataframe(segmento_tbl[["SEGMENTO", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=260)
-
-    # ------------------------------------------------------------
-    # Drill: Faturamento por Loja x Segmento Gerencial
-    # ------------------------------------------------------------
-    with st.expander("Abrir drill: Faturamento por Loja x Segmento Gerencial"):
-        st.markdown("#### Faturamento por Loja x Segmento Gerencial")
-
-        df_seg_loja = df_f.copy()
-        df_seg_loja["SEGMENTO_GERENCIAL"] = df_seg_loja["SEGMENTO_N"].apply(classificar_segmento_gerencial)
-
-        ordem_segmentos = ["Automotivo", "Decor/Industrial", "Thinner", "Sem Segmento", "Outros Segmentos"]
-
-        seg_loja = (
-            df_seg_loja.groupby(["LOJA_N", "SEGMENTO_GERENCIAL"], dropna=False)["FAT_LINHA"]
+        st.markdown("#### Ranking de Vendedores")
+        vendedores_mxl = (
+            df_mxl.groupby("VENDEDOR_N", dropna=False)[VAL_COL]
             .sum()
             .reset_index()
-            .rename(columns={"LOJA_N": "LOJA", "SEGMENTO_GERENCIAL": "Segmento", "FAT_LINHA": "Faturamento"})
+            .rename(columns={"VENDEDOR_N": "VENDEDOR", VAL_COL: "Faturamento"})
+            .sort_values("Faturamento", ascending=False)
         )
+        vendedores_mxl_view = vendedores_mxl.copy()
+        vendedores_mxl_view["Faturamento (R$)"] = vendedores_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+        st.dataframe(vendedores_mxl_view[["VENDEDOR", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=320)
 
-        lojas_drill = sorted(
-            [x for x in df_seg_loja["LOJA_N"].dropna().astype(str).unique() if x.strip() != ""],
-            key=lambda x: (LOJA_KEY_RANK.get(canonical_key(x), DEFAULT_RANK), str(x)),
-        )
-
-        idx_completo = pd.MultiIndex.from_product(
-            [lojas_drill, ordem_segmentos],
-            names=["LOJA", "Segmento"],
-        )
-
-        seg_loja = (
-            seg_loja.set_index(["LOJA", "Segmento"])
-            .reindex(idx_completo, fill_value=0)
-            .reset_index()
-        )
-
-        # Remove colunas/categorias opcionais quando não houver faturamento no recorte.
-        segmentos_com_valor = seg_loja.groupby("Segmento")["Faturamento"].sum()
-        segmentos_visiveis = [s for s in ordem_segmentos if float(segmentos_com_valor.get(s, 0.0) or 0.0) > 0]
-        if not segmentos_visiveis:
-            segmentos_visiveis = ["Automotivo", "Decor/Industrial", "Thinner"]
-
-        seg_loja = seg_loja[seg_loja["Segmento"].isin(segmentos_visiveis)].copy()
-
-        total_loja = (
-            seg_loja.groupby("LOJA", dropna=False)["Faturamento"]
+        linhas_mxl = (
+            df_mxl.groupby("LINHA_N", dropna=False)[VAL_COL]
             .sum()
-            .reset_index(name="Total Loja")
+            .reset_index()
+            .rename(columns={"LINHA_N": "LINHA", VAL_COL: "Faturamento"})
+            .sort_values("Faturamento", ascending=False)
         )
-        seg_loja = seg_loja.merge(total_loja, on="LOJA", how="left")
-        seg_loja["% da Loja"] = seg_loja.apply(
-            lambda r: (r["Faturamento"] / r["Total Loja"] * 100) if r["Total Loja"] not in (0, None) else 0.0,
-            axis=1,
-        )
-        seg_loja["Label"] = seg_loja.apply(
-            lambda r: ("R$ " + format_brl(r["Faturamento"]) + "<br>" + f"{r['% da Loja']:.1f}%".replace(".", ","))
-            if r["Faturamento"] > 0 else "",
-            axis=1,
-        )
-
-        fig_seg_loja = px.bar(
-            seg_loja,
-            x="LOJA",
-            y="Faturamento",
-            color="Segmento",
-            barmode="group",
-            text="Label",
-            category_orders={"LOJA": lojas_drill, "Segmento": segmentos_visiveis},
-            title="Faturamento por Loja: Automotivo x Decor/Industrial x Thinner",
-            hover_data={"Faturamento": ":,.2f", "% da Loja": ":.2f", "Total Loja": ":,.2f", "Label": False},
-        )
-        fig_seg_loja.update_traces(textposition="outside", cliponaxis=False)
-        fig_seg_loja.update_layout(
-            xaxis_tickangle=-30,
-            yaxis_title="Faturamento (R$)",
-            xaxis_title="Loja",
-            legend_title="Segmento Gerencial",
-            height=520,
-        )
-        st.plotly_chart(fig_seg_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
-
-        st.markdown("##### Tabela detalhada")
-        tabela_seg = seg_loja.pivot_table(
-            index="LOJA",
-            columns="Segmento",
-            values="Faturamento",
-            aggfunc="sum",
-            fill_value=0,
-        ).reset_index()
-
-        pct_seg = seg_loja.pivot_table(
-            index="LOJA",
-            columns="Segmento",
-            values="% da Loja",
-            aggfunc="sum",
-            fill_value=0,
-        ).reset_index()
-
-        tabela_final = pd.DataFrame({"LOJA": lojas_drill})
-        for seg in segmentos_visiveis:
-            valor_map = tabela_seg.set_index("LOJA")[seg].to_dict() if seg in tabela_seg.columns else {}
-            pct_map = pct_seg.set_index("LOJA")[seg].to_dict() if seg in pct_seg.columns else {}
-            tabela_final[f"{seg} (R$)"] = tabela_final["LOJA"].map(lambda l: float(valor_map.get(l, 0.0) or 0.0))
-            tabela_final[f"{seg} (%)"] = tabela_final["LOJA"].map(lambda l: float(pct_map.get(l, 0.0) or 0.0))
-
-        tabela_final["Total Loja (R$)"] = tabela_final[[f"{s} (R$)" for s in segmentos_visiveis]].sum(axis=1)
-
-        total_row = {"LOJA": "TOTAL"}
-        total_geral_seg = float(tabela_final["Total Loja (R$)"].sum()) if len(tabela_final) else 0.0
-        for seg in segmentos_visiveis:
-            total_seg = float(tabela_final[f"{seg} (R$)"].sum()) if len(tabela_final) else 0.0
-            total_row[f"{seg} (R$)"] = total_seg
-            total_row[f"{seg} (%)"] = (total_seg / total_geral_seg * 100) if total_geral_seg != 0 else 0.0
-        total_row["Total Loja (R$)"] = total_geral_seg
-
-        tabela_final = pd.concat([tabela_final, pd.DataFrame([total_row])], ignore_index=True)
-
-        format_cols = {}
-        for seg in segmentos_visiveis:
-            format_cols[f"{seg} (R$)"] = lambda v: "R$ " + format_brl(v)
-            format_cols[f"{seg} (%)"] = lambda v: f"{float(v):.2f}%".replace(".", ",")
-        format_cols["Total Loja (R$)"] = lambda v: "R$ " + format_brl(v)
-
-        sty_seg = (
-            tabela_final.style
-            .apply(lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
-            .format(format_cols)
-        )
-
-        st.dataframe(sty_seg, use_container_width=True, hide_index=True, height=520)
-
-# ===== MARKUP GERAL (apenas o número) =====
-custo_total_mkp = float(df_f["CUSTO_ST_NUM"].sum()) if ("CUSTO_ST_NUM" in df_f.columns and len(df_f)) else 0.0
-mkp_geral = (fat_total / custo_total_mkp) if custo_total_mkp not in (0, None) else None
-
-st.markdown("#### Markup Geral")
-if mkp_geral is None:
-    st.metric("MKP", "—")
-    st.caption("Sem dados de **CUSTO TT + ST** (ou custo zerado) no recorte selecionado.")
-else:
-    st.metric("MKP", (f"{mkp_geral:.2f}".replace(".", ",")))
-
-
-st.divider()
-
-# ============================================================
-# TOP 10 LINHAS + DRILLS
-# ============================================================
-st.subheader("Top 10 Linhas por Faturamento")
-
-linhas = (
-    df_f.groupby("LINHA_N", dropna=False)["FAT_LINHA"]
-    .sum()
-    .reset_index()
-    .sort_values("FAT_LINHA", ascending=False)
-    .rename(columns={"LINHA_N": "LINHA", "FAT_LINHA": "Faturamento"})
-)
-
-total_ref = fat_total if fat_total != 0 else 1.0
-linhas["% do Total"] = (linhas["Faturamento"] / total_ref) * 100
-
-top10_linhas = linhas.head(10).copy()
-top10_linhas["Faturamento (R$)"] = top10_linhas["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-top10_linhas["% do Total"] = top10_linhas["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-
-st.dataframe(top10_linhas[["LINHA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=360)
-
-if "linha_sel" not in st.session_state:
-    st.session_state["linha_sel"] = linhas["LINHA"].iloc[0] if len(linhas) else None
-
-with st.expander("Ver todas as linhas (drill)"):
-    full_linhas = linhas.copy()
-    full_linhas["Faturamento (R$)"] = full_linhas["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-    full_linhas["% do Total"] = full_linhas["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-    st.dataframe(full_linhas[["LINHA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=520)
-
-    st.markdown("**Detalhar uma LINHA (abre o detalhamento por MARCA logo abaixo):**")
-    st.session_state["linha_sel"] = st.selectbox(
-        "Escolha a LINHA para detalhar",
-        options=full_linhas["LINHA"].tolist(),
-        index=full_linhas["LINHA"].tolist().index(st.session_state["linha_sel"])
-        if st.session_state["linha_sel"] in full_linhas["LINHA"].tolist()
-        else 0,
-        key="linha_sel_from_drill",
-    )
-
-st.divider()
-
-st.subheader("Drill: LINHA → Marcas (valores e % sobre a LINHA)")
-
-linhas_disponiveis = linhas["LINHA"].tolist()
-
-if len(linhas_disponiveis) == 0:
-    st.info("Não há linhas disponíveis no filtro atual.")
-else:
-    colS1, colS2, colS3 = st.columns([1.2, 0.6, 1.4], gap="medium")
-
-    with colS1:
-        termo = st.text_input("Pesquisar LINHA (digite parte do nome)", value="", placeholder="Ex.: verniz, primer, massa...")
-
-    with colS2:
-        if st.button("Pesquisar"):
-            t = (termo or "").strip().lower()
-            if t:
-                matches = [x for x in linhas_disponiveis if t in str(x).lower()]
-                if matches:
-                    st.session_state["linha_sel"] = matches[0]
-                else:
-                    st.warning("Nenhuma LINHA encontrada com esse termo. Tente outro.")
-            else:
-                st.info("Digite um termo para pesquisar.")
-
-    t_live = (termo or "").strip().lower()
-    linhas_filtradas = [x for x in linhas_disponiveis if (t_live in str(x).lower())] if t_live else linhas_disponiveis
-
-    linha_padrao = st.session_state.get(
-        "linha_sel",
-        linhas_filtradas[0] if linhas_filtradas else (linhas_disponiveis[0] if linhas_disponiveis else None),
-    )
-    if linhas_filtradas and linha_padrao not in linhas_filtradas:
-        linha_padrao = linhas_filtradas[0]
-
-    with colS3:
-        linha_sel = st.selectbox(
-            "LINHA selecionada",
-            options=linhas_filtradas if linhas_filtradas else linhas_disponiveis,
-            index=(linhas_filtradas if linhas_filtradas else linhas_disponiveis).index(linha_padrao)
-            if linha_padrao in (linhas_filtradas if linhas_filtradas else linhas_disponiveis)
-            else 0,
-            key="linha_sel_main",
-        )
-        st.session_state["linha_sel"] = linha_sel
-
-    df_linha = df_f[df_f["LINHA_N"] == st.session_state["linha_sel"]].copy()
-    total_linha = float(df_linha["FAT_LINHA"].sum()) if len(df_linha) else 0.0
-
-    cA, cB = st.columns([1, 2])
-    with cA:
-        st.metric("Total da LINHA (R$)", "R$ " + format_brl(total_linha))
-    with cB:
-        pct_linha_no_total = (total_linha / (fat_total if fat_total != 0 else 1.0)) * 100
-        st.metric("% da LINHA sobre Total", f"{pct_linha_no_total:.2f}%".replace(".", ","))
-
-    # Mantém a visão agregada por MARCA para o gráfico lateral
-    marcas_linha = (
-        df_linha.groupby("MARCA_N", dropna=False)["FAT_LINHA"]
-        .sum()
-        .reset_index()
-        .sort_values("FAT_LINHA", ascending=False)
-        .rename(columns={"MARCA_N": "MARCA", "FAT_LINHA": "Faturamento"})
-    )
-
-    denom_linha = total_linha if total_linha != 0 else 1.0
-    denom_total = fat_total if fat_total != 0 else 1.0
-
-    marcas_linha["% da LINHA"] = (marcas_linha["Faturamento"] / denom_linha) * 100
-    marcas_linha["% do Total"] = (marcas_linha["Faturamento"] / denom_total) * 100
-
-    # Nova visão detalhada: LINHA → MARCA → CÓDIGO/DESCRIÇÃO DO PRODUTO
-    produtos_linha = (
-        df_linha.groupby(["MARCA_N", "COD_N", "DESC_CANON_N"], dropna=False)
-        .agg(Faturamento=("FAT_LINHA", "sum"), QTD=("QTD_NUM", "sum"))
-        .reset_index()
-        .sort_values("Faturamento", ascending=False)
-        .rename(
-            columns={
-                "MARCA_N": "MARCA",
-                "COD_N": "CÓDIGO",
-                "DESC_CANON_N": "DESCRIÇÃO",
-            }
-        )
-    )
-
-    produtos_linha["% da LINHA"] = (produtos_linha["Faturamento"] / denom_linha) * 100
-    produtos_linha["% do Total"] = (produtos_linha["Faturamento"] / denom_total) * 100
-    produtos_linha["Faturamento (R$)"] = produtos_linha["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
-    produtos_linha["QTD"] = produtos_linha["QTD"].apply(lambda v: format_brl(v))
-    produtos_linha["% da LINHA"] = produtos_linha["% da LINHA"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-    produtos_linha["% do Total"] = produtos_linha["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-
-    cX, cY = st.columns([1.2, 1.0], gap="large")
-    with cX:
-        st.markdown(f"**Produtos dentro da LINHA: {st.session_state['linha_sel']}**")
-        st.dataframe(
-            produtos_linha[["MARCA", "CÓDIGO", "DESCRIÇÃO", "Faturamento (R$)", "QTD", "% da LINHA", "% do Total"]],
-            use_container_width=True,
-            hide_index=True,
-            height=520,
-        )
-
-    with cY:
-        fig_ml = px.bar(
-            marcas_linha.head(15),
-            x="Faturamento",
-            y="MARCA",
-            orientation="h",
-            title=f"Top Marcas na Linha: {st.session_state['linha_sel']}",
-        )
-        fig_ml.update_layout(
-            yaxis={"categoryorder": "total ascending"},
-            xaxis_title="Faturamento (R$)",
-            yaxis_title="Marca",
-        )
-        st.plotly_chart(fig_ml, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
-
-st.divider()
-
-# ============================================================
-# Ranking de Clientes + Drill (mantido embaixo)
-# ============================================================
-st.subheader("Ranking de Clientes")
-
-df_cli_base = df_f.copy()
-df_cli_base["VAL_CLIENTE"] = df_cli_base[VAL_COL]
-df_cli_base = df_cli_base[df_cli_base["VAL_CLIENTE"].notna()].copy()
-
-total_cliente_ref = float(df_cli_base["VAL_CLIENTE"].sum()) if len(df_cli_base) else 0.0
-den_total_cli = total_cliente_ref if total_cliente_ref != 0 else 1.0
-
-clientes = (
-    df_cli_base.groupby("CLIENTE_N", dropna=False)["VAL_CLIENTE"]
-    .sum()
-    .reset_index()
-    .sort_values("VAL_CLIENTE", ascending=False)
-    .rename(columns={"CLIENTE_N": "CLIENTE", "VAL_CLIENTE": "VR_TOTAL"})
-)
-clientes["% do Total"] = (clientes["VR_TOTAL"] / den_total_cli) * 100
-
-cC1, cC2 = st.columns([1.15, 1.0], gap="large")
-
-with cC1:
-    st.markdown("#### Top 15 Clientes")
-    top15 = clientes.head(15).copy()
-    top15["VR TOTAL (R$)"] = top15["VR_TOTAL"].apply(lambda v: "R$ " + format_brl(v))
-    top15["% do Total"] = top15["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-    st.dataframe(top15[["CLIENTE", "VR TOTAL (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=380)
-
-    with st.expander("Ver todos os clientes (drill)"):
-        full = clientes.copy()
-        full["VR TOTAL (R$)"] = full["VR_TOTAL"].apply(lambda v: "R$ " + format_brl(v))
-        full["% do Total"] = full["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-        st.dataframe(full[["CLIENTE", "VR TOTAL (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=520)
-
-with cC2:
-    st.markdown("#### Gráfico: Top 15 Clientes")
-    fig_cli = px.bar(
-        top15.sort_values("VR_TOTAL"),
-        x="VR_TOTAL",
-        y="CLIENTE",
-        orientation="h",
-        title="Top 15 Clientes (VR TOTAL)",
-    )
-    fig_cli.update_layout(
-        yaxis={"categoryorder": "total ascending"},
-        xaxis_title="VR TOTAL (R$)",
-        yaxis_title="Cliente",
-    )
-    st.plotly_chart(fig_cli, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
-
-st.divider()
-
-st.subheader("Drill: Cliente → Linhas → Marcas")
-
-clientes_lista = clientes["CLIENTE"].tolist()
-clientes_disp = ["(Todos)"] + clientes_lista
-if len(clientes_lista) == 0:
-    st.info("Não há clientes na base filtrada.")
-else:
-    s1, s2, s3 = st.columns([1.2, 0.6, 1.4], gap="medium")
-    with s1:
-        termo_cli = st.text_input("Pesquisar CLIENTE (digite parte do nome)", value="", placeholder="Ex.: construtora, oficina, nome...")
-
-    with s2:
-        if st.button("Pesquisar Cliente"):
-            t = (termo_cli or "").strip().lower()
-            if t:
-                matches = [x for x in clientes_lista if t in str(x).lower()]
-                if matches:
-                    st.session_state["cliente_sel"] = matches[0]
-                else:
-                    st.warning("Nenhum cliente encontrado com esse termo.")
-            else:
-                st.info("Digite um termo para pesquisar.")
-
-    t_live = (termo_cli or "").strip().lower()
-    clientes_filtrados_base = [x for x in clientes_lista if (t_live in str(x).lower())] if t_live else clientes_lista
-    clientes_filtrados = ["(Todos)"] + clientes_filtrados_base
-
-    if "cliente_sel" not in st.session_state:
-        st.session_state["cliente_sel"] = "(Todos)"
-
-    cliente_padrao = st.session_state["cliente_sel"]
-    if cliente_padrao not in clientes_filtrados:
-        cliente_padrao = "(Todos)" if "(Todos)" in clientes_filtrados else (clientes_filtrados[0] if clientes_filtrados else "(Todos)")
-        st.session_state["cliente_sel"] = cliente_padrao
-
-    with s3:
-        cliente_sel = st.selectbox(
-            "CLIENTE selecionado",
-            options=clientes_filtrados,
-            index=clientes_filtrados.index(cliente_padrao) if cliente_padrao in clientes_filtrados else 0,
-            key="cliente_sel_main",
-        )
-        st.session_state["cliente_sel"] = cliente_sel
-
-    if st.session_state["cliente_sel"] == "(Todos)":
-        df_cliente = df_cli_base.copy()
-    else:
-        df_cliente = df_cli_base[df_cli_base["CLIENTE_N"] == st.session_state["cliente_sel"]].copy()
-
-    total_cliente = float(df_cliente["VAL_CLIENTE"].sum()) if len(df_cliente) else 0.0
-
-    m1, m2 = st.columns([1, 2])
-    with m1:
-        st.metric("VR TOTAL do Cliente (R$)", "R$ " + format_brl(total_cliente))
-    with m2:
-        pct_cli_total = (total_cliente / den_total_cli) * 100
-        st.metric("% do Cliente sobre Total", f"{pct_cli_total:.2f}%".replace(".", ","))
-
-    linhas_cli = (
-        df_cliente.groupby("LINHA_N", dropna=False)["VAL_CLIENTE"]
-        .sum()
-        .reset_index()
-        .sort_values("VAL_CLIENTE", ascending=False)
-        .rename(columns={"LINHA_N": "LINHA", "VAL_CLIENTE": "VR_TOTAL"})
-    )
-    den_cli = total_cliente if total_cliente != 0 else 1.0
-    linhas_cli["% do Cliente"] = (linhas_cli["VR_TOTAL"] / den_cli) * 100
-    linhas_cli["% do Total"] = (linhas_cli["VR_TOTAL"] / den_total_cli) * 100
-
-    if "linha_cli_sel" not in st.session_state:
-        st.session_state["linha_cli_sel"] = "(Todas)"
-
-    cL1, cL2 = st.columns([1.2, 1.0], gap="large")
-    with cL1:
-        st.markdown("#### Linhas compradas por este Cliente")
-        linhas_view = linhas_cli.copy()
-        linhas_view["VR TOTAL (R$)"] = linhas_view["VR_TOTAL"].apply(lambda v: "R$ " + format_brl(v))
-        linhas_view["% do Cliente"] = linhas_view["% do Cliente"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-        linhas_view["% do Total"] = linhas_view["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-        st.dataframe(linhas_view[["LINHA", "VR TOTAL (R$)", "% do Cliente", "% do Total"]], use_container_width=True, hide_index=True, height=420)
-
-        st.markdown("**Selecione uma LINHA para ver as MARCAS dentro dela (para esse cliente):**")
-        linhas_opcoes = ["(Todas)"] + linhas_cli["LINHA"].tolist()
-        linha_padrao = st.session_state.get("linha_cli_sel", "(Todas)")
-        if linha_padrao not in linhas_opcoes:
-            linha_padrao = "(Todas)"
-        st.session_state["linha_cli_sel"] = st.selectbox(
-            "LINHA do Cliente",
-            options=linhas_opcoes,
-            index=linhas_opcoes.index(linha_padrao),
-            key="linha_cli_sel_box",
-        )
-
-    with cL2:
-        fig_lc = px.bar(
-            linhas_cli.head(15).sort_values("VR_TOTAL"),
-            x="VR_TOTAL",
-            y="LINHA",
-            orientation="h",
-            title="Top Linhas deste Cliente",
-        )
-        fig_lc.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="VR TOTAL (R$)", yaxis_title="Linha")
-        st.plotly_chart(fig_lc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+        linhas_mxl_view = linhas_mxl.copy()
+        linhas_mxl_view["Faturamento (R$)"] = linhas_mxl_view["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+
+        lm1, lm2 = st.columns([1.1, 1.3], gap="large")
+        with lm1:
+            st.markdown("#### Linhas das Marcas Selecionadas")
+            st.dataframe(linhas_mxl_view[["LINHA", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=360)
+
+        with lm2:
+            linhas_opts_mxl = linhas_mxl["LINHA"].tolist()
+            linha_sel_mxl = st.selectbox(
+                "Selecione a linha para detalhar os produtos",
+                options=linhas_opts_mxl,
+                index=0 if len(linhas_opts_mxl) else None,
+                key="linha_sel_marcas_x_loja",
+            ) if len(linhas_opts_mxl) else None
+
+            if linha_sel_mxl is not None:
+                df_prod_mxl = df_mxl[df_mxl["LINHA_N"] == linha_sel_mxl].copy()
+                prod_mxl = (
+                    df_prod_mxl.groupby(["COD_N", "DESC_CANON_N"], dropna=False)
+                    .agg(VALOR=(VAL_COL, "sum"), QTD=("QTD_NUM", "sum"))
+                    .reset_index()
+                    .rename(columns={"COD_N": "CÓD", "DESC_CANON_N": "DESCRIÇÃO"})
+                    .sort_values("VALOR", ascending=False)
+                )
+                prod_mxl_view = prod_mxl.copy()
+                prod_mxl_view["VALOR (R$)"] = prod_mxl_view["VALOR"].apply(lambda v: "R$ " + format_brl(v))
+                prod_mxl_view["QTD"] = prod_mxl_view["QTD"].apply(lambda v: format_brl(v))
+                st.markdown(f"#### Produtos da Linha: {linha_sel_mxl}")
+                st.dataframe(prod_mxl_view[["CÓD", "DESCRIÇÃO", "VALOR (R$)", "QTD"]], use_container_width=True, hide_index=True, height=360)
 
     st.divider()
 
-    linha_label = st.session_state["linha_cli_sel"]
-    st.markdown(
-        f"### Drill: Cliente **{st.session_state['cliente_sel']}** → Linha **{linha_label}** → Marcas"
+with aba_vendas:
+
+    # =========================
+    # Linha 2: Vendedor + Segmento
+    # =========================
+    col3, col4 = st.columns([1.4, 1.0], gap="large")
+
+    with col3:
+        st.subheader("Ranking de Vendas por Vendedor")
+
+        vendedores = (
+            df_f.groupby("VENDEDOR_N", dropna=False)["FAT_LINHA"]
+            .sum()
+            .reset_index()
+            .sort_values("FAT_LINHA", ascending=False)
+            .rename(columns={"VENDEDOR_N": "VENDEDOR", "FAT_LINHA": "Faturamento"})
+        )
+
+        fig_vend = px.bar(
+            vendedores.head(15),
+            x="Faturamento",
+            y="VENDEDOR",
+            orientation="h",
+            title="Top Vendedores (QTD × UNIT)",
+        )
+        fig_vend.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="Faturamento (R$)", yaxis_title="Vendedor")
+        st.plotly_chart(fig_vend, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+        with st.expander("Ver todos os vendedores"):
+            vend_full = vendedores.copy()
+            vend_full["Faturamento (R$)"] = vend_full["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+            st.dataframe(vend_full[["VENDEDOR", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=520)
+
+        # ============================================================
+        # ✅ TABELA MARKUP (OCULTA EM DRILL)
+        # ============================================================
+        with st.expander("Abrir tabela: Faturamento × Custo TT + ST × Markup (por Vendedor)"):
+            df_tmp = df_f.copy()
+            df_tmp = df_tmp[df_tmp["FAT_LINHA"].notna()].copy()
+
+            if "CUSTO_ST_NUM" not in df_tmp.columns or (df_tmp["CUSTO_ST_NUM"].notna().sum() == 0):
+                st.info("Coluna **CUSTO TT + ST** não encontrada (ou sem valores) no Excel para o recorte filtrado.")
+            else:
+                vend_mkp = (
+                    df_tmp.groupby("VENDEDOR_N", dropna=False)[["FAT_LINHA", "CUSTO_ST_NUM"]]
+                    .sum()
+                    .reset_index()
+                    .rename(columns={"VENDEDOR_N": "VENDEDOR", "FAT_LINHA": "Faturamento", "CUSTO_ST_NUM": "Custo TT + ST"})
+                )
+
+                vend_mkp["MARKUP"] = vend_mkp.apply(
+                    lambda r: (r["Faturamento"] / r["Custo TT + ST"])
+                    if (r["Custo TT + ST"] not in (0, None) and not (isinstance(r["Custo TT + ST"], float) and pd.isna(r["Custo TT + ST"])))
+                    else None,
+                    axis=1,
+                )
+
+                vend_mkp = vend_mkp.sort_values("Faturamento", ascending=False).copy()
+
+                tot_fat = float(vend_mkp["Faturamento"].sum()) if len(vend_mkp) else 0.0
+                tot_cus = float(vend_mkp["Custo TT + ST"].sum()) if len(vend_mkp) else 0.0
+                tot_mkp = (tot_fat / tot_cus) if tot_cus not in (0, None) else None
+
+                vend_disp = vend_mkp.copy()
+                vend_disp["Faturamento (R$)"] = vend_disp["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+                vend_disp["Custo TT + ST (R$)"] = vend_disp["Custo TT + ST"].apply(lambda v: "R$ " + format_brl(v))
+                vend_disp["Markup"] = vend_disp["MARKUP"].apply(
+                    lambda v: (f"{v:.2f}x".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—"
+                )
+
+                vend_disp_tot = pd.concat(
+                    [
+                        vend_disp[["VENDEDOR", "Faturamento (R$)", "Custo TT + ST (R$)", "Markup"]],
+                        pd.DataFrame([{
+                            "VENDEDOR": "TOTAL",
+                            "Faturamento (R$)": "R$ " + format_brl(tot_fat),
+                            "Custo TT + ST (R$)": "R$ " + format_brl(tot_cus),
+                            "Markup": (f"{tot_mkp:.2f}x".replace(".", ",")) if tot_mkp is not None else "—",
+                        }]),
+                    ],
+                    ignore_index=True,
+                )
+
+                st.dataframe(vend_disp_tot, use_container_width=True, hide_index=True, height=360)
+
+    with col4:
+        st.subheader("Faturamento por Segmento")
+
+        segmento = (
+            df_f.groupby("SEGMENTO_N", dropna=False)["FAT_LINHA"]
+            .sum()
+            .reset_index()
+            .sort_values("FAT_LINHA", ascending=False)
+            .rename(columns={"SEGMENTO_N": "SEGMENTO", "FAT_LINHA": "Faturamento"})
+        )
+
+        fig_seg = px.pie(segmento, names="SEGMENTO", values="Faturamento", title="Participação por Segmento (QTD × UNIT)")
+        st.plotly_chart(fig_seg, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+        segmento_tbl = segmento.copy()
+        segmento_tbl["Faturamento (R$)"] = segmento_tbl["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+        st.dataframe(segmento_tbl[["SEGMENTO", "Faturamento (R$)"]], use_container_width=True, hide_index=True, height=260)
+
+        # ------------------------------------------------------------
+        # Drill: Faturamento por Loja x Segmento Gerencial
+        # ------------------------------------------------------------
+        with st.expander("Abrir drill: Faturamento por Loja x Segmento Gerencial"):
+            st.markdown("#### Faturamento por Loja x Segmento Gerencial")
+
+            df_seg_loja = df_f.copy()
+            df_seg_loja["SEGMENTO_GERENCIAL"] = df_seg_loja["SEGMENTO_N"].apply(classificar_segmento_gerencial)
+
+            ordem_segmentos = ["Automotivo", "Decor/Industrial", "Thinner", "Sem Segmento", "Outros Segmentos"]
+
+            seg_loja = (
+                df_seg_loja.groupby(["LOJA_N", "SEGMENTO_GERENCIAL"], dropna=False)["FAT_LINHA"]
+                .sum()
+                .reset_index()
+                .rename(columns={"LOJA_N": "LOJA", "SEGMENTO_GERENCIAL": "Segmento", "FAT_LINHA": "Faturamento"})
+            )
+
+            lojas_drill = sorted(
+                [x for x in df_seg_loja["LOJA_N"].dropna().astype(str).unique() if x.strip() != ""],
+                key=lambda x: (LOJA_KEY_RANK.get(canonical_key(x), DEFAULT_RANK), str(x)),
+            )
+
+            idx_completo = pd.MultiIndex.from_product(
+                [lojas_drill, ordem_segmentos],
+                names=["LOJA", "Segmento"],
+            )
+
+            seg_loja = (
+                seg_loja.set_index(["LOJA", "Segmento"])
+                .reindex(idx_completo, fill_value=0)
+                .reset_index()
+            )
+
+            # Remove colunas/categorias opcionais quando não houver faturamento no recorte.
+            segmentos_com_valor = seg_loja.groupby("Segmento")["Faturamento"].sum()
+            segmentos_visiveis = [s for s in ordem_segmentos if float(segmentos_com_valor.get(s, 0.0) or 0.0) > 0]
+            if not segmentos_visiveis:
+                segmentos_visiveis = ["Automotivo", "Decor/Industrial", "Thinner"]
+
+            seg_loja = seg_loja[seg_loja["Segmento"].isin(segmentos_visiveis)].copy()
+
+            total_loja = (
+                seg_loja.groupby("LOJA", dropna=False)["Faturamento"]
+                .sum()
+                .reset_index(name="Total Loja")
+            )
+            seg_loja = seg_loja.merge(total_loja, on="LOJA", how="left")
+            seg_loja["% da Loja"] = seg_loja.apply(
+                lambda r: (r["Faturamento"] / r["Total Loja"] * 100) if r["Total Loja"] not in (0, None) else 0.0,
+                axis=1,
+            )
+            seg_loja["Label"] = seg_loja.apply(
+                lambda r: ("R$ " + format_brl(r["Faturamento"]) + "<br>" + f"{r['% da Loja']:.1f}%".replace(".", ","))
+                if r["Faturamento"] > 0 else "",
+                axis=1,
+            )
+
+            fig_seg_loja = px.bar(
+                seg_loja,
+                x="LOJA",
+                y="Faturamento",
+                color="Segmento",
+                barmode="group",
+                text="Label",
+                category_orders={"LOJA": lojas_drill, "Segmento": segmentos_visiveis},
+                title="Faturamento por Loja: Automotivo x Decor/Industrial x Thinner",
+                hover_data={"Faturamento": ":,.2f", "% da Loja": ":.2f", "Total Loja": ":,.2f", "Label": False},
+            )
+            fig_seg_loja.update_traces(textposition="outside", cliponaxis=False)
+            fig_seg_loja.update_layout(
+                xaxis_tickangle=-30,
+                yaxis_title="Faturamento (R$)",
+                xaxis_title="Loja",
+                legend_title="Segmento Gerencial",
+                height=520,
+            )
+            st.plotly_chart(fig_seg_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+            st.markdown("##### Tabela detalhada")
+            tabela_seg = seg_loja.pivot_table(
+                index="LOJA",
+                columns="Segmento",
+                values="Faturamento",
+                aggfunc="sum",
+                fill_value=0,
+            ).reset_index()
+
+            pct_seg = seg_loja.pivot_table(
+                index="LOJA",
+                columns="Segmento",
+                values="% da Loja",
+                aggfunc="sum",
+                fill_value=0,
+            ).reset_index()
+
+            tabela_final = pd.DataFrame({"LOJA": lojas_drill})
+            for seg in segmentos_visiveis:
+                valor_map = tabela_seg.set_index("LOJA")[seg].to_dict() if seg in tabela_seg.columns else {}
+                pct_map = pct_seg.set_index("LOJA")[seg].to_dict() if seg in pct_seg.columns else {}
+                tabela_final[f"{seg} (R$)"] = tabela_final["LOJA"].map(lambda l: float(valor_map.get(l, 0.0) or 0.0))
+                tabela_final[f"{seg} (%)"] = tabela_final["LOJA"].map(lambda l: float(pct_map.get(l, 0.0) or 0.0))
+
+            tabela_final["Total Loja (R$)"] = tabela_final[[f"{s} (R$)" for s in segmentos_visiveis]].sum(axis=1)
+
+            total_row = {"LOJA": "TOTAL"}
+            total_geral_seg = float(tabela_final["Total Loja (R$)"].sum()) if len(tabela_final) else 0.0
+            for seg in segmentos_visiveis:
+                total_seg = float(tabela_final[f"{seg} (R$)"].sum()) if len(tabela_final) else 0.0
+                total_row[f"{seg} (R$)"] = total_seg
+                total_row[f"{seg} (%)"] = (total_seg / total_geral_seg * 100) if total_geral_seg != 0 else 0.0
+            total_row["Total Loja (R$)"] = total_geral_seg
+
+            tabela_final = pd.concat([tabela_final, pd.DataFrame([total_row])], ignore_index=True)
+
+            format_cols = {}
+            for seg in segmentos_visiveis:
+                format_cols[f"{seg} (R$)"] = lambda v: "R$ " + format_brl(v)
+                format_cols[f"{seg} (%)"] = lambda v: f"{float(v):.2f}%".replace(".", ",")
+            format_cols["Total Loja (R$)"] = lambda v: "R$ " + format_brl(v)
+
+            sty_seg = (
+                tabela_final.style
+                .apply(lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
+                .format(format_cols)
+            )
+
+            st.dataframe(sty_seg, use_container_width=True, hide_index=True, height=520)
+
+    # ===== MARKUP GERAL (apenas o número) =====
+    custo_total_mkp = float(df_f["CUSTO_ST_NUM"].sum()) if ("CUSTO_ST_NUM" in df_f.columns and len(df_f)) else 0.0
+    mkp_geral = (fat_total / custo_total_mkp) if custo_total_mkp not in (0, None) else None
+
+    st.markdown("#### Markup Geral")
+    if mkp_geral is None:
+        st.metric("MKP", "—")
+        st.caption("Sem dados de **CUSTO TT + ST** (ou custo zerado) no recorte selecionado.")
+    else:
+        st.metric("MKP", (f"{mkp_geral:.2f}".replace(".", ",")))
+
+
+    st.divider()
+
+with aba_marcas:
+
+    # ============================================================
+    # TOP 10 LINHAS + DRILLS
+    # ============================================================
+    st.subheader("Top 10 Linhas por Faturamento")
+
+    linhas = (
+        df_f.groupby("LINHA_N", dropna=False)["FAT_LINHA"]
+        .sum()
+        .reset_index()
+        .sort_values("FAT_LINHA", ascending=False)
+        .rename(columns={"LINHA_N": "LINHA", "FAT_LINHA": "Faturamento"})
     )
 
-    if st.session_state["linha_cli_sel"] == "(Todas)":
-        df_cli_linha = df_cliente.copy()
+    total_ref = fat_total if fat_total != 0 else 1.0
+    linhas["% do Total"] = (linhas["Faturamento"] / total_ref) * 100
+
+    top10_linhas = linhas.head(10).copy()
+    top10_linhas["Faturamento (R$)"] = top10_linhas["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+    top10_linhas["% do Total"] = top10_linhas["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+
+    st.dataframe(top10_linhas[["LINHA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=360)
+
+    if "linha_sel" not in st.session_state:
+        st.session_state["linha_sel"] = linhas["LINHA"].iloc[0] if len(linhas) else None
+
+    with st.expander("Ver todas as linhas (drill)"):
+        full_linhas = linhas.copy()
+        full_linhas["Faturamento (R$)"] = full_linhas["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+        full_linhas["% do Total"] = full_linhas["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+        st.dataframe(full_linhas[["LINHA", "Faturamento (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=520)
+
+        st.markdown("**Detalhar uma LINHA (abre o detalhamento por MARCA logo abaixo):**")
+        st.session_state["linha_sel"] = st.selectbox(
+            "Escolha a LINHA para detalhar",
+            options=full_linhas["LINHA"].tolist(),
+            index=full_linhas["LINHA"].tolist().index(st.session_state["linha_sel"])
+            if st.session_state["linha_sel"] in full_linhas["LINHA"].tolist()
+            else 0,
+            key="linha_sel_from_drill",
+        )
+
+    st.divider()
+
+    st.subheader("Drill: LINHA → Marcas (valores e % sobre a LINHA)")
+
+    linhas_disponiveis = linhas["LINHA"].tolist()
+
+    if len(linhas_disponiveis) == 0:
+        st.info("Não há linhas disponíveis no filtro atual.")
     else:
-        df_cli_linha = df_cliente[df_cliente["LINHA_N"] == st.session_state["linha_cli_sel"]].copy()
+        colS1, colS2, colS3 = st.columns([1.2, 0.6, 1.4], gap="medium")
 
-    total_cli_linha = float(df_cli_linha["VAL_CLIENTE"].sum()) if len(df_cli_linha) else 0.0
+        with colS1:
+            termo = st.text_input("Pesquisar LINHA (digite parte do nome)", value="", placeholder="Ex.: verniz, primer, massa...")
 
-    cM1, cM2 = st.columns([1, 2])
-    with cM1:
-        st.metric("Total da Linha no Cliente (R$)", "R$ " + format_brl(total_cli_linha))
-    with cM2:
-        pct_linha_cli = (total_cli_linha / (total_cliente if total_cliente != 0 else 1.0)) * 100
-        st.metric("% da Linha sobre Cliente", f"{pct_linha_cli:.2f}%".replace(".", ","))
+        with colS2:
+            if st.button("Pesquisar"):
+                t = (termo or "").strip().lower()
+                if t:
+                    matches = [x for x in linhas_disponiveis if t in str(x).lower()]
+                    if matches:
+                        st.session_state["linha_sel"] = matches[0]
+                    else:
+                        st.warning("Nenhuma LINHA encontrada com esse termo. Tente outro.")
+                else:
+                    st.info("Digite um termo para pesquisar.")
 
-    marcas_cli = (
-        df_cli_linha.groupby("MARCA_N", dropna=False)["VAL_CLIENTE"]
+        t_live = (termo or "").strip().lower()
+        linhas_filtradas = [x for x in linhas_disponiveis if (t_live in str(x).lower())] if t_live else linhas_disponiveis
+
+        linha_padrao = st.session_state.get(
+            "linha_sel",
+            linhas_filtradas[0] if linhas_filtradas else (linhas_disponiveis[0] if linhas_disponiveis else None),
+        )
+        if linhas_filtradas and linha_padrao not in linhas_filtradas:
+            linha_padrao = linhas_filtradas[0]
+
+        with colS3:
+            linha_sel = st.selectbox(
+                "LINHA selecionada",
+                options=linhas_filtradas if linhas_filtradas else linhas_disponiveis,
+                index=(linhas_filtradas if linhas_filtradas else linhas_disponiveis).index(linha_padrao)
+                if linha_padrao in (linhas_filtradas if linhas_filtradas else linhas_disponiveis)
+                else 0,
+                key="linha_sel_main",
+            )
+            st.session_state["linha_sel"] = linha_sel
+
+        df_linha = df_f[df_f["LINHA_N"] == st.session_state["linha_sel"]].copy()
+        total_linha = float(df_linha["FAT_LINHA"].sum()) if len(df_linha) else 0.0
+
+        cA, cB = st.columns([1, 2])
+        with cA:
+            st.metric("Total da LINHA (R$)", "R$ " + format_brl(total_linha))
+        with cB:
+            pct_linha_no_total = (total_linha / (fat_total if fat_total != 0 else 1.0)) * 100
+            st.metric("% da LINHA sobre Total", f"{pct_linha_no_total:.2f}%".replace(".", ","))
+
+        # Mantém a visão agregada por MARCA para o gráfico lateral
+        marcas_linha = (
+            df_linha.groupby("MARCA_N", dropna=False)["FAT_LINHA"]
+            .sum()
+            .reset_index()
+            .sort_values("FAT_LINHA", ascending=False)
+            .rename(columns={"MARCA_N": "MARCA", "FAT_LINHA": "Faturamento"})
+        )
+
+        denom_linha = total_linha if total_linha != 0 else 1.0
+        denom_total = fat_total if fat_total != 0 else 1.0
+
+        marcas_linha["% da LINHA"] = (marcas_linha["Faturamento"] / denom_linha) * 100
+        marcas_linha["% do Total"] = (marcas_linha["Faturamento"] / denom_total) * 100
+
+        # Nova visão detalhada: LINHA → MARCA → CÓDIGO/DESCRIÇÃO DO PRODUTO
+        produtos_linha = (
+            df_linha.groupby(["MARCA_N", "COD_N", "DESC_CANON_N"], dropna=False)
+            .agg(Faturamento=("FAT_LINHA", "sum"), QTD=("QTD_NUM", "sum"))
+            .reset_index()
+            .sort_values("Faturamento", ascending=False)
+            .rename(
+                columns={
+                    "MARCA_N": "MARCA",
+                    "COD_N": "CÓDIGO",
+                    "DESC_CANON_N": "DESCRIÇÃO",
+                }
+            )
+        )
+
+        produtos_linha["% da LINHA"] = (produtos_linha["Faturamento"] / denom_linha) * 100
+        produtos_linha["% do Total"] = (produtos_linha["Faturamento"] / denom_total) * 100
+        produtos_linha["Faturamento (R$)"] = produtos_linha["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
+        produtos_linha["QTD"] = produtos_linha["QTD"].apply(lambda v: format_brl(v))
+        produtos_linha["% da LINHA"] = produtos_linha["% da LINHA"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+        produtos_linha["% do Total"] = produtos_linha["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+
+        cX, cY = st.columns([1.2, 1.0], gap="large")
+        with cX:
+            st.markdown(f"**Produtos dentro da LINHA: {st.session_state['linha_sel']}**")
+            st.dataframe(
+                produtos_linha[["MARCA", "CÓDIGO", "DESCRIÇÃO", "Faturamento (R$)", "QTD", "% da LINHA", "% do Total"]],
+                use_container_width=True,
+                hide_index=True,
+                height=520,
+            )
+
+        with cY:
+            fig_ml = px.bar(
+                marcas_linha.head(15),
+                x="Faturamento",
+                y="MARCA",
+                orientation="h",
+                title=f"Top Marcas na Linha: {st.session_state['linha_sel']}",
+            )
+            fig_ml.update_layout(
+                yaxis={"categoryorder": "total ascending"},
+                xaxis_title="Faturamento (R$)",
+                yaxis_title="Marca",
+            )
+            st.plotly_chart(fig_ml, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+    st.divider()
+
+with aba_clientes:
+    st.markdown("#### Inteligência de clientes")
+
+    # ============================================================
+    # Ranking de Clientes + Drill (mantido embaixo)
+    # ============================================================
+    st.subheader("Ranking de Clientes")
+
+    df_cli_base = df_f.copy()
+    df_cli_base["VAL_CLIENTE"] = df_cli_base[VAL_COL]
+    df_cli_base = df_cli_base[df_cli_base["VAL_CLIENTE"].notna()].copy()
+
+    total_cliente_ref = float(df_cli_base["VAL_CLIENTE"].sum()) if len(df_cli_base) else 0.0
+    den_total_cli = total_cliente_ref if total_cliente_ref != 0 else 1.0
+
+    clientes = (
+        df_cli_base.groupby("CLIENTE_N", dropna=False)["VAL_CLIENTE"]
         .sum()
         .reset_index()
         .sort_values("VAL_CLIENTE", ascending=False)
-        .rename(columns={"MARCA_N": "MARCA", "VAL_CLIENTE": "VR_TOTAL"})
+        .rename(columns={"CLIENTE_N": "CLIENTE", "VAL_CLIENTE": "VR_TOTAL"})
     )
+    clientes["% do Total"] = (clientes["VR_TOTAL"] / den_total_cli) * 100
 
-    denom_linha_cli = total_cli_linha if total_cli_linha != 0 else 1.0
-    marcas_cli["% da Linha"] = (marcas_cli["VR_TOTAL"] / denom_linha_cli) * 100
-    marcas_cli["% do Cliente"] = (marcas_cli["VR_TOTAL"] / (total_cliente if total_cliente != 0 else 1.0)) * 100
-    marcas_cli["% do Total"] = (marcas_cli["VR_TOTAL"] / den_total_cli) * 100
+    cC1, cC2 = st.columns([1.15, 1.0], gap="large")
 
-    mc1, mc2 = st.columns([1.2, 1.0], gap="large")
-    with mc1:
-        marcas_view = marcas_cli.copy()
-        marcas_view["VR TOTAL (R$)"] = marcas_view["VR_TOTAL"].apply(lambda v: "R$ " + format_brl(v))
-        marcas_view["% da Linha"] = marcas_view["% da Linha"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-        marcas_view["% do Cliente"] = marcas_view["% do Cliente"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-        marcas_view["% do Total"] = marcas_view["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
-        st.dataframe(
-            marcas_view[["MARCA", "VR TOTAL (R$)", "% da Linha", "% do Cliente", "% do Total"]],
-            use_container_width=True,
-            hide_index=True,
-            height=520,
-        )
+    with cC1:
+        st.markdown("#### Top 15 Clientes")
+        top15 = clientes.head(15).copy()
+        top15["VR TOTAL (R$)"] = top15["VR_TOTAL"].apply(lambda v: "R$ " + format_brl(v))
+        top15["% do Total"] = top15["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+        st.dataframe(top15[["CLIENTE", "VR TOTAL (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=380)
 
-    with mc2:
-        fig_mc = px.bar(
-            marcas_cli.head(15).sort_values("VR_TOTAL"),
+        with st.expander("Ver todos os clientes (drill)"):
+            full = clientes.copy()
+            full["VR TOTAL (R$)"] = full["VR_TOTAL"].apply(lambda v: "R$ " + format_brl(v))
+            full["% do Total"] = full["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+            st.dataframe(full[["CLIENTE", "VR TOTAL (R$)", "% do Total"]], use_container_width=True, hide_index=True, height=520)
+
+    with cC2:
+        st.markdown("#### Gráfico: Top 15 Clientes")
+        fig_cli = px.bar(
+            top15.sort_values("VR_TOTAL"),
             x="VR_TOTAL",
-            y="MARCA",
+            y="CLIENTE",
             orientation="h",
-            title="Top Marcas nesta Linha (Cliente)",
+            title="Top 15 Clientes (VR TOTAL)",
         )
-        fig_mc.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="VR TOTAL (R$)", yaxis_title="Marca")
-        st.plotly_chart(fig_mc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+        fig_cli.update_layout(
+            yaxis={"categoryorder": "total ascending"},
+            xaxis_title="VR TOTAL (R$)",
+            yaxis_title="Cliente",
+        )
+        st.plotly_chart(fig_cli, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
+    st.divider()
 
-# ============================================================
-# KPI: Evolução de Faturamento por Cliente (Jan → Dez)
-# - A seleção "LINHA do Cliente" (no Drill acima) filtra a evolução.
-# - Se LINHA do Cliente = (Todas), considera todas as linhas.
-# - Mostra TODOS os clientes (linhas) no modelo Cliente x Meses.
-# ============================================================
-st.subheader("Evolução de Faturamento por Cliente (Jan → Dez)")
+    st.subheader("Drill: Cliente → Linhas → Marcas")
 
-linha_kpi = st.session_state.get("linha_cli_sel", "(Todas)")
-
-df_evo = df_f.copy()
-df_evo = df_evo[df_evo["DATA"].notna()].copy()
-
-# Mantém o comportamento de "Jan → Dez" do ANO_ATUAL
-df_evo = df_evo[df_evo["DATA"].dt.year == ANO_ATUAL].copy()
-
-# Linha (opcional)
-if linha_kpi != "(Todas)":
-    df_evo = df_evo[df_evo["LINHA_N"] == linha_kpi].copy()
-
-if len(df_evo) == 0:
-    if linha_kpi != "(Todas)":
-        st.info(f"Sem dados para o recorte atual na linha **{linha_kpi}** no ano **{ANO_ATUAL}**.")
+    clientes_lista = clientes["CLIENTE"].tolist()
+    clientes_disp = ["(Todos)"] + clientes_lista
+    if len(clientes_lista) == 0:
+        st.info("Não há clientes na base filtrada.")
     else:
-        st.info(f"Sem dados para o recorte atual no ano **{ANO_ATUAL}**.")
-else:
-    df_evo["MES_NUM"] = df_evo["DATA"].dt.month
+        s1, s2, s3 = st.columns([1.2, 0.6, 1.4], gap="medium")
+        with s1:
+            termo_cli = st.text_input("Pesquisar CLIENTE (digite parte do nome)", value="", placeholder="Ex.: construtora, oficina, nome...")
 
-    # Pivot: Cliente x Mês (VAL_COL já definido no app: VR_TOTAL_NUM ou FAT_LINHA)
-    tbl_evo = (
-        df_evo.groupby(["CLIENTE_N", "MES_NUM"], dropna=False)[VAL_COL]
-        .sum()
-        .reset_index()
-        .pivot(index="CLIENTE_N", columns="MES_NUM", values=VAL_COL)
-        .fillna(0.0)
-    )
+        with s2:
+            if st.button("Pesquisar Cliente"):
+                t = (termo_cli or "").strip().lower()
+                if t:
+                    matches = [x for x in clientes_lista if t in str(x).lower()]
+                    if matches:
+                        st.session_state["cliente_sel"] = matches[0]
+                    else:
+                        st.warning("Nenhum cliente encontrado com esse termo.")
+                else:
+                    st.info("Digite um termo para pesquisar.")
 
-    # Garante colunas 1..12
-    for m in range(1, 13):
-        if m not in tbl_evo.columns:
-            tbl_evo[m] = 0.0
-    tbl_evo = tbl_evo[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]
+        t_live = (termo_cli or "").strip().lower()
+        clientes_filtrados_base = [x for x in clientes_lista if (t_live in str(x).lower())] if t_live else clientes_lista
+        clientes_filtrados = ["(Todos)"] + clientes_filtrados_base
 
-    meses_full = {
-        1: "JANEIRO", 2: "FEVEREIRO", 3: "MARÇO", 4: "ABRIL",
-        5: "MAIO", 6: "JUNHO", 7: "JULHO", 8: "AGOSTO",
-        9: "SETEMBRO", 10: "OUTUBRO", 11: "NOVEMBRO", 12: "DEZEMBRO",
-    }
-    tbl_evo = tbl_evo.rename(columns=meses_full)
+        if "cliente_sel" not in st.session_state:
+            st.session_state["cliente_sel"] = "(Todos)"
 
-    # Ordena por total do ano (maior → menor)
-    tbl_evo["_TOTAL_ANO"] = tbl_evo.sum(axis=1)
-    tbl_evo = tbl_evo.sort_values("_TOTAL_ANO", ascending=False).drop(columns=["_TOTAL_ANO"])
+        cliente_padrao = st.session_state["cliente_sel"]
+        if cliente_padrao not in clientes_filtrados:
+            cliente_padrao = "(Todos)" if "(Todos)" in clientes_filtrados else (clientes_filtrados[0] if clientes_filtrados else "(Todos)")
+            st.session_state["cliente_sel"] = cliente_padrao
 
-    # Formatação (R$)
-    tbl_disp = tbl_evo.copy()
-    for c in tbl_disp.columns:
-        tbl_disp[c] = tbl_disp[c].apply(lambda v: "R$ " + format_brl(v))
+        with s3:
+            cliente_sel = st.selectbox(
+                "CLIENTE selecionado",
+                options=clientes_filtrados,
+                index=clientes_filtrados.index(cliente_padrao) if cliente_padrao in clientes_filtrados else 0,
+                key="cliente_sel_main",
+            )
+            st.session_state["cliente_sel"] = cliente_sel
 
-    tbl_disp = tbl_disp.reset_index().rename(columns={"CLIENTE_N": "CLIENTE"})
+        if st.session_state["cliente_sel"] == "(Todos)":
+            df_cliente = df_cli_base.copy()
+        else:
+            df_cliente = df_cli_base[df_cli_base["CLIENTE_N"] == st.session_state["cliente_sel"]].copy()
 
-    if linha_kpi != "(Todas)":
-        st.caption(f"Filtro aplicado: **LINHA do Cliente = {linha_kpi}**")
-    else:
-        st.caption("Filtro aplicado: **LINHA do Cliente = (Todas)** (todas as linhas)")
+        total_cliente = float(df_cliente["VAL_CLIENTE"].sum()) if len(df_cliente) else 0.0
 
-    st.dataframe(tbl_disp, use_container_width=True, hide_index=True, height=520)
+        m1, m2 = st.columns([1, 2])
+        with m1:
+            st.metric("VR TOTAL do Cliente (R$)", "R$ " + format_brl(total_cliente))
+        with m2:
+            pct_cli_total = (total_cliente / den_total_cli) * 100
+            st.metric("% do Cliente sobre Total", f"{pct_cli_total:.2f}%".replace(".", ","))
 
-st.divider()
-
-with st.expander("Ver base filtrada (conferência)"):
-    st.dataframe(df_f, use_container_width=True, height=520)
-
-# ============================================================
-# Indicador de Compras (Base + COMPRAS + DEVOLUÇÕES) - DRILL
-# ============================================================
-def _safe_div(num: float, den: float):
-    try:
-        if den in (0, None) or (isinstance(den, float) and pd.isna(den)):
-            return None
-        return float(num) / float(den)
-    except Exception:
-        return None
-
-
-def _fmt_num(v):
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return "—"
-    try:
-        return f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception:
-        return "—"
-
-
-def _indicador_style(v):
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return ""
-    try:
-        x = float(v)
-    except Exception:
-        return ""
-
-    # > 0,00 azul
-    if x > 0:
-        return "background-color: #D9E8FF; color: #0B3D91; font-weight: 700;"
-    # entre -0,01 e -0,09 verde
-    if -0.09 <= x <= -0.01:
-        return "background-color: #DFF5E1; color: #1B5E20; font-weight: 700;"
-    # entre -0,10 e -0,15 amarelo
-    if -0.15 <= x <= -0.10:
-        return "background-color: #FFF4CC; color: #7A5A00; font-weight: 700;"
-    # abaixo de -0,15 vermelho
-    if x < -0.15:
-        return "background-color: #FFD6D6; color: #8A1C1C; font-weight: 700;"
-    return ""
-
-
-def _calc_indicador_compras_por_loja(df_f: pd.DataFrame, df_compras: pd.DataFrame, df_devol: pd.DataFrame,
-                                    lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None) -> pd.DataFrame:
-    # ===== Base (Vendas) por loja: FATURAMENTO + CMV (coluna T -> CUSTO_T_NUM)
-    if df_f is None or df_f.empty:
-        base = pd.DataFrame({"LOJA": [], "FATURAMENTO": [], "CMV": []})
-    else:
-        base = (
-            df_f.groupby("LOJA_N", dropna=False)
-            .agg(FATURAMENTO=("FAT_LINHA", "sum"), CMV=("CUSTO_T_NUM", "sum"))
+        linhas_cli = (
+            df_cliente.groupby("LINHA_N", dropna=False)["VAL_CLIENTE"]
+            .sum()
             .reset_index()
-            .rename(columns={"LOJA_N": "LOJA"})
+            .sort_values("VAL_CLIENTE", ascending=False)
+            .rename(columns={"LINHA_N": "LINHA", "VAL_CLIENTE": "VR_TOTAL"})
+        )
+        den_cli = total_cliente if total_cliente != 0 else 1.0
+        linhas_cli["% do Cliente"] = (linhas_cli["VR_TOTAL"] / den_cli) * 100
+        linhas_cli["% do Total"] = (linhas_cli["VR_TOTAL"] / den_total_cli) * 100
+
+        if "linha_cli_sel" not in st.session_state:
+            st.session_state["linha_cli_sel"] = "(Todas)"
+
+        cL1, cL2 = st.columns([1.2, 1.0], gap="large")
+        with cL1:
+            st.markdown("#### Linhas compradas por este Cliente")
+            linhas_view = linhas_cli.copy()
+            linhas_view["VR TOTAL (R$)"] = linhas_view["VR_TOTAL"].apply(lambda v: "R$ " + format_brl(v))
+            linhas_view["% do Cliente"] = linhas_view["% do Cliente"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+            linhas_view["% do Total"] = linhas_view["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+            st.dataframe(linhas_view[["LINHA", "VR TOTAL (R$)", "% do Cliente", "% do Total"]], use_container_width=True, hide_index=True, height=420)
+
+            st.markdown("**Selecione uma LINHA para ver as MARCAS dentro dela (para esse cliente):**")
+            linhas_opcoes = ["(Todas)"] + linhas_cli["LINHA"].tolist()
+            linha_padrao = st.session_state.get("linha_cli_sel", "(Todas)")
+            if linha_padrao not in linhas_opcoes:
+                linha_padrao = "(Todas)"
+            st.session_state["linha_cli_sel"] = st.selectbox(
+                "LINHA do Cliente",
+                options=linhas_opcoes,
+                index=linhas_opcoes.index(linha_padrao),
+                key="linha_cli_sel_box",
+            )
+
+        with cL2:
+            fig_lc = px.bar(
+                linhas_cli.head(15).sort_values("VR_TOTAL"),
+                x="VR_TOTAL",
+                y="LINHA",
+                orientation="h",
+                title="Top Linhas deste Cliente",
+            )
+            fig_lc.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="VR TOTAL (R$)", yaxis_title="Linha")
+            st.plotly_chart(fig_lc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+        st.divider()
+
+        linha_label = st.session_state["linha_cli_sel"]
+        st.markdown(
+            f"### Drill: Cliente **{st.session_state['cliente_sel']}** → Linha **{linha_label}** → Marcas"
         )
 
-    # ===== Recorte compras/devoluções (loja + data)
-    def _aplicar_recorte_mov(dfm: pd.DataFrame) -> pd.DataFrame:
-        if dfm is None or dfm.empty:
-            return pd.DataFrame(columns=["LOJA_N", "TOT_DOC_NUM", "DATA"])
+        if st.session_state["linha_cli_sel"] == "(Todas)":
+            df_cli_linha = df_cliente.copy()
+        else:
+            df_cli_linha = df_cliente[df_cliente["LINHA_N"] == st.session_state["linha_cli_sel"]].copy()
 
-        out = dfm.copy()
-        if lojas_sel_aplicadas:
-            out = out[out["LOJA_N"].isin(lojas_sel_aplicadas)]
+        total_cli_linha = float(df_cli_linha["VAL_CLIENTE"].sum()) if len(df_cli_linha) else 0.0
 
-        if "DATA" in out.columns and out["DATA"].notna().any():
-            out = out[out["DATA"].notna()]
-            out = out[(out["DATA"] >= pd.Timestamp(data_ini)) & (out["DATA"] < (pd.Timestamp(data_fim) + pd.Timedelta(days=1)))]
-            if mes_nums_sel:
-                out = out[out["DATA"].dt.month.isin(mes_nums_sel)]
+        cM1, cM2 = st.columns([1, 2])
+        with cM1:
+            st.metric("Total da Linha no Cliente (R$)", "R$ " + format_brl(total_cli_linha))
+        with cM2:
+            pct_linha_cli = (total_cli_linha / (total_cliente if total_cliente != 0 else 1.0)) * 100
+            st.metric("% da Linha sobre Cliente", f"{pct_linha_cli:.2f}%".replace(".", ","))
+
+        marcas_cli = (
+            df_cli_linha.groupby("MARCA_N", dropna=False)["VAL_CLIENTE"]
+            .sum()
+            .reset_index()
+            .sort_values("VAL_CLIENTE", ascending=False)
+            .rename(columns={"MARCA_N": "MARCA", "VAL_CLIENTE": "VR_TOTAL"})
+        )
+
+        denom_linha_cli = total_cli_linha if total_cli_linha != 0 else 1.0
+        marcas_cli["% da Linha"] = (marcas_cli["VR_TOTAL"] / denom_linha_cli) * 100
+        marcas_cli["% do Cliente"] = (marcas_cli["VR_TOTAL"] / (total_cliente if total_cliente != 0 else 1.0)) * 100
+        marcas_cli["% do Total"] = (marcas_cli["VR_TOTAL"] / den_total_cli) * 100
+
+        mc1, mc2 = st.columns([1.2, 1.0], gap="large")
+        with mc1:
+            marcas_view = marcas_cli.copy()
+            marcas_view["VR TOTAL (R$)"] = marcas_view["VR_TOTAL"].apply(lambda v: "R$ " + format_brl(v))
+            marcas_view["% da Linha"] = marcas_view["% da Linha"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+            marcas_view["% do Cliente"] = marcas_view["% do Cliente"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+            marcas_view["% do Total"] = marcas_view["% do Total"].apply(lambda p: f"{p:.2f}%".replace(".", ","))
+            st.dataframe(
+                marcas_view[["MARCA", "VR TOTAL (R$)", "% da Linha", "% do Cliente", "% do Total"]],
+                use_container_width=True,
+                hide_index=True,
+                height=520,
+            )
+
+        with mc2:
+            fig_mc = px.bar(
+                marcas_cli.head(15).sort_values("VR_TOTAL"),
+                x="VR_TOTAL",
+                y="MARCA",
+                orientation="h",
+                title="Top Marcas nesta Linha (Cliente)",
+            )
+            fig_mc.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="VR TOTAL (R$)", yaxis_title="Marca")
+            st.plotly_chart(fig_mc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+
+
+    # ============================================================
+    # KPI: Evolução de Faturamento por Cliente (Jan → Dez)
+    # - A seleção "LINHA do Cliente" (no Drill acima) filtra a evolução.
+    # - Se LINHA do Cliente = (Todas), considera todas as linhas.
+    # - Mostra TODOS os clientes (linhas) no modelo Cliente x Meses.
+    # ============================================================
+    st.subheader("Evolução de Faturamento por Cliente (Jan → Dez)")
+
+    linha_kpi = st.session_state.get("linha_cli_sel", "(Todas)")
+
+    df_evo = df_f.copy()
+    df_evo = df_evo[df_evo["DATA"].notna()].copy()
+
+    # Mantém o comportamento de "Jan → Dez" do ANO_ATUAL
+    df_evo = df_evo[df_evo["DATA"].dt.year == ANO_ATUAL].copy()
+
+    # Linha (opcional)
+    if linha_kpi != "(Todas)":
+        df_evo = df_evo[df_evo["LINHA_N"] == linha_kpi].copy()
+
+    if len(df_evo) == 0:
+        if linha_kpi != "(Todas)":
+            st.info(f"Sem dados para o recorte atual na linha **{linha_kpi}** no ano **{ANO_ATUAL}**.")
+        else:
+            st.info(f"Sem dados para o recorte atual no ano **{ANO_ATUAL}**.")
+    else:
+        df_evo["MES_NUM"] = df_evo["DATA"].dt.month
+
+        # Pivot: Cliente x Mês (VAL_COL já definido no app: VR_TOTAL_NUM ou FAT_LINHA)
+        tbl_evo = (
+            df_evo.groupby(["CLIENTE_N", "MES_NUM"], dropna=False)[VAL_COL]
+            .sum()
+            .reset_index()
+            .pivot(index="CLIENTE_N", columns="MES_NUM", values=VAL_COL)
+            .fillna(0.0)
+        )
+
+        # Garante colunas 1..12
+        for m in range(1, 13):
+            if m not in tbl_evo.columns:
+                tbl_evo[m] = 0.0
+        tbl_evo = tbl_evo[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]
+
+        meses_full = {
+            1: "JANEIRO", 2: "FEVEREIRO", 3: "MARÇO", 4: "ABRIL",
+            5: "MAIO", 6: "JUNHO", 7: "JULHO", 8: "AGOSTO",
+            9: "SETEMBRO", 10: "OUTUBRO", 11: "NOVEMBRO", 12: "DEZEMBRO",
+        }
+        tbl_evo = tbl_evo.rename(columns=meses_full)
+
+        # Ordena por total do ano (maior → menor)
+        tbl_evo["_TOTAL_ANO"] = tbl_evo.sum(axis=1)
+        tbl_evo = tbl_evo.sort_values("_TOTAL_ANO", ascending=False).drop(columns=["_TOTAL_ANO"])
+
+        # Formatação (R$)
+        tbl_disp = tbl_evo.copy()
+        for c in tbl_disp.columns:
+            tbl_disp[c] = tbl_disp[c].apply(lambda v: "R$ " + format_brl(v))
+
+        tbl_disp = tbl_disp.reset_index().rename(columns={"CLIENTE_N": "CLIENTE"})
+
+        if linha_kpi != "(Todas)":
+            st.caption(f"Filtro aplicado: **LINHA do Cliente = {linha_kpi}**")
+        else:
+            st.caption("Filtro aplicado: **LINHA do Cliente = (Todas)** (todas as linhas)")
+
+        st.dataframe(tbl_disp, use_container_width=True, hide_index=True, height=520)
+
+    st.divider()
+
+with aba_compras:
+    st.markdown("#### Compras, CMV e auditoria dos dados")
+
+    with st.expander("Ver base filtrada (conferência)"):
+        st.dataframe(df_f, use_container_width=True, height=520)
+
+    # ============================================================
+    # Indicador de Compras (Base + COMPRAS + DEVOLUÇÕES) - DRILL
+    # ============================================================
+    def _safe_div(num: float, den: float):
+        try:
+            if den in (0, None) or (isinstance(den, float) and pd.isna(den)):
+                return None
+            return float(num) / float(den)
+        except Exception:
+            return None
+
+
+    def _fmt_num(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return "—"
+        try:
+            return f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return "—"
+
+
+    def _indicador_style(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        try:
+            x = float(v)
+        except Exception:
+            return ""
+
+        # > 0,00 azul
+        if x > 0:
+            return "background-color: #D9E8FF; color: #0B3D91; font-weight: 700;"
+        # entre -0,01 e -0,09 verde
+        if -0.09 <= x <= -0.01:
+            return "background-color: #DFF5E1; color: #1B5E20; font-weight: 700;"
+        # entre -0,10 e -0,15 amarelo
+        if -0.15 <= x <= -0.10:
+            return "background-color: #FFF4CC; color: #7A5A00; font-weight: 700;"
+        # abaixo de -0,15 vermelho
+        if x < -0.15:
+            return "background-color: #FFD6D6; color: #8A1C1C; font-weight: 700;"
+        return ""
+
+
+    def _calc_indicador_compras_por_loja(df_f: pd.DataFrame, df_compras: pd.DataFrame, df_devol: pd.DataFrame,
+                                        lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None) -> pd.DataFrame:
+        # ===== Base (Vendas) por loja: FATURAMENTO + CMV (coluna T -> CUSTO_T_NUM)
+        if df_f is None or df_f.empty:
+            base = pd.DataFrame({"LOJA": [], "FATURAMENTO": [], "CMV": []})
+        else:
+            base = (
+                df_f.groupby("LOJA_N", dropna=False)
+                .agg(FATURAMENTO=("FAT_LINHA", "sum"), CMV=("CUSTO_T_NUM", "sum"))
+                .reset_index()
+                .rename(columns={"LOJA_N": "LOJA"})
+            )
+
+        # ===== Recorte compras/devoluções (loja + data)
+        def _aplicar_recorte_mov(dfm: pd.DataFrame) -> pd.DataFrame:
+            if dfm is None or dfm.empty:
+                return pd.DataFrame(columns=["LOJA_N", "TOT_DOC_NUM", "DATA"])
+
+            out = dfm.copy()
+            if lojas_sel_aplicadas:
+                out = out[out["LOJA_N"].isin(lojas_sel_aplicadas)]
+
+            if "DATA" in out.columns and out["DATA"].notna().any():
+                out = out[out["DATA"].notna()]
+                out = out[(out["DATA"] >= pd.Timestamp(data_ini)) & (out["DATA"] < (pd.Timestamp(data_fim) + pd.Timedelta(days=1)))]
+                if mes_nums_sel:
+                    out = out[out["DATA"].dt.month.isin(mes_nums_sel)]
+            return out
+
+        comp_f = _aplicar_recorte_mov(df_compras)
+        dev_f = _aplicar_recorte_mov(df_devol)
+
+        comp_by = (
+            comp_f.groupby("LOJA_N", dropna=False)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "COMPRAS"})
+            if not comp_f.empty else pd.DataFrame({"LOJA": [], "COMPRAS": []})
+        )
+        dev_by = (
+            dev_f.groupby("LOJA_N", dropna=False)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "DEVOLUÇÕES"})
+            if not dev_f.empty else pd.DataFrame({"LOJA": [], "DEVOLUÇÕES": []})
+        )
+
+        # ===== Consolida tudo por loja (outer para não perder loja que só exista em uma fonte)
+        out = base.merge(comp_by, on="LOJA", how="outer").merge(dev_by, on="LOJA", how="outer")
+
+        # Preenche nulos
+        for c in ["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES"]:
+            if c in out.columns:
+                out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
+
+        out["COMPRAS LÍQ"] = out["COMPRAS"] - out["DEVOLUÇÕES"]
+        out["MKP VENDAS X CUSTO"] = out.apply(lambda r: _safe_div(r["FATURAMENTO"], r["CMV"]), axis=1)
+        out["MKP COMPRAS X VENDAS"] = out.apply(lambda r: _safe_div(r["FATURAMENTO"], r["COMPRAS LÍQ"]), axis=1)
+        out["DIF COMPRAS X CMV"] = out["CMV"] - out["COMPRAS LÍQ"]
+        out["INDICADOR DE COMPRAS"] = out["MKP COMPRAS X VENDAS"] - out["MKP VENDAS X CUSTO"]
+
+        # Ordena (opcional)
+        out = out.sort_values("LOJA", key=lambda s: s.astype(str)).reset_index(drop=True)
+
+        # ===== Linha TOTAL (soma valores e recalcula razões no total)
+        total_fat = float(out["FATURAMENTO"].sum()) if len(out) else 0.0
+        total_cmv = float(out["CMV"].sum()) if len(out) else 0.0
+        total_comp = float(out["COMPRAS"].sum()) if len(out) else 0.0
+        total_dev = float(out["DEVOLUÇÕES"].sum()) if len(out) else 0.0
+        total_comp_liq = total_comp - total_dev
+
+        total_mkp_vc = _safe_div(total_fat, total_cmv)
+        total_mkp_cv = _safe_div(total_fat, total_comp_liq)
+        total_dif = total_cmv - total_comp_liq
+        total_ind = None
+        if (total_mkp_vc is not None) and (total_mkp_cv is not None):
+            total_ind = total_mkp_cv - total_mkp_vc
+
+        total_row = pd.DataFrame([{
+            "LOJA": "TOTAL",
+            "FATURAMENTO": total_fat,
+            "CMV": total_cmv,
+            "MKP VENDAS X CUSTO": total_mkp_vc,
+            "COMPRAS": total_comp,
+            "DEVOLUÇÕES": total_dev,
+            "COMPRAS LÍQ": total_comp_liq,
+            "MKP COMPRAS X VENDAS": total_mkp_cv,
+            "DIF COMPRAS X CMV": total_dif,
+            "INDICADOR DE COMPRAS": total_ind,
+        }])
+
+        out = pd.concat([out, total_row], ignore_index=True)
+
+        # Reordena colunas
+        cols = [
+            "LOJA",
+            "FATURAMENTO",
+            "CMV",
+            "MKP VENDAS X CUSTO",
+            "COMPRAS",
+            "DEVOLUÇÕES",
+            "COMPRAS LÍQ",
+            "MKP COMPRAS X VENDAS",
+            "DIF COMPRAS X CMV",
+            "INDICADOR DE COMPRAS",
+        ]
+        out = out[[c for c in cols if c in out.columns]]
         return out
 
-    comp_f = _aplicar_recorte_mov(df_compras)
-    dev_f = _aplicar_recorte_mov(df_devol)
 
-    comp_by = (
-        comp_f.groupby("LOJA_N", dropna=False)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "COMPRAS"})
-        if not comp_f.empty else pd.DataFrame({"LOJA": [], "COMPRAS": []})
-    )
-    dev_by = (
-        dev_f.groupby("LOJA_N", dropna=False)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "DEVOLUÇÕES"})
-        if not dev_f.empty else pd.DataFrame({"LOJA": [], "DEVOLUÇÕES": []})
-    )
+    def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None):
+        # Drill (expander) + computação sob demanda para não pesar a abertura do dashboard
+        with st.expander("Abrir Indicador de Compras", expanded=False):
+            st.caption("Tabela por loja (com TOTAL ao final), usando o mesmo recorte de lojas e período do dashboard.")
+            show_tbl = st.checkbox("Calcular/mostrar tabela", value=False, key="show_indicador_compras_tbl")
+            if not show_tbl:
+                st.info("Marque a opção acima para calcular e exibir a tabela. (Isso deixa o carregamento inicial mais leve.)")
+                return
 
-    # ===== Consolida tudo por loja (outer para não perder loja que só exista em uma fonte)
-    out = base.merge(comp_by, on="LOJA", how="outer").merge(dev_by, on="LOJA", how="outer")
+            df_compras, df_devol = carregar_movimentacoes_compras()
+            tbl = _calc_indicador_compras_por_loja(df_f, df_compras, df_devol, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
 
-    # Preenche nulos
-    for c in ["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES"]:
-        if c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
-
-    out["COMPRAS LÍQ"] = out["COMPRAS"] - out["DEVOLUÇÕES"]
-    out["MKP VENDAS X CUSTO"] = out.apply(lambda r: _safe_div(r["FATURAMENTO"], r["CMV"]), axis=1)
-    out["MKP COMPRAS X VENDAS"] = out.apply(lambda r: _safe_div(r["FATURAMENTO"], r["COMPRAS LÍQ"]), axis=1)
-    out["DIF COMPRAS X CMV"] = out["CMV"] - out["COMPRAS LÍQ"]
-    out["INDICADOR DE COMPRAS"] = out["MKP COMPRAS X VENDAS"] - out["MKP VENDAS X CUSTO"]
-
-    # Ordena (opcional)
-    out = out.sort_values("LOJA", key=lambda s: s.astype(str)).reset_index(drop=True)
-
-    # ===== Linha TOTAL (soma valores e recalcula razões no total)
-    total_fat = float(out["FATURAMENTO"].sum()) if len(out) else 0.0
-    total_cmv = float(out["CMV"].sum()) if len(out) else 0.0
-    total_comp = float(out["COMPRAS"].sum()) if len(out) else 0.0
-    total_dev = float(out["DEVOLUÇÕES"].sum()) if len(out) else 0.0
-    total_comp_liq = total_comp - total_dev
-
-    total_mkp_vc = _safe_div(total_fat, total_cmv)
-    total_mkp_cv = _safe_div(total_fat, total_comp_liq)
-    total_dif = total_cmv - total_comp_liq
-    total_ind = None
-    if (total_mkp_vc is not None) and (total_mkp_cv is not None):
-        total_ind = total_mkp_cv - total_mkp_vc
-
-    total_row = pd.DataFrame([{
-        "LOJA": "TOTAL",
-        "FATURAMENTO": total_fat,
-        "CMV": total_cmv,
-        "MKP VENDAS X CUSTO": total_mkp_vc,
-        "COMPRAS": total_comp,
-        "DEVOLUÇÕES": total_dev,
-        "COMPRAS LÍQ": total_comp_liq,
-        "MKP COMPRAS X VENDAS": total_mkp_cv,
-        "DIF COMPRAS X CMV": total_dif,
-        "INDICADOR DE COMPRAS": total_ind,
-    }])
-
-    out = pd.concat([out, total_row], ignore_index=True)
-
-    # Reordena colunas
-    cols = [
-        "LOJA",
-        "FATURAMENTO",
-        "CMV",
-        "MKP VENDAS X CUSTO",
-        "COMPRAS",
-        "DEVOLUÇÕES",
-        "COMPRAS LÍQ",
-        "MKP COMPRAS X VENDAS",
-        "DIF COMPRAS X CMV",
-        "INDICADOR DE COMPRAS",
-    ]
-    out = out[[c for c in cols if c in out.columns]]
-    return out
-
-
-def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None):
-    # Drill (expander) + computação sob demanda para não pesar a abertura do dashboard
-    with st.expander("Abrir Indicador de Compras", expanded=False):
-        st.caption("Tabela por loja (com TOTAL ao final), usando o mesmo recorte de lojas e período do dashboard.")
-        show_tbl = st.checkbox("Calcular/mostrar tabela", value=False, key="show_indicador_compras_tbl")
-        if not show_tbl:
-            st.info("Marque a opção acima para calcular e exibir a tabela. (Isso deixa o carregamento inicial mais leve.)")
-            return
-
-        df_compras, df_devol = carregar_movimentacoes_compras()
-        tbl = _calc_indicador_compras_por_loja(df_f, df_compras, df_devol, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
-
-        sty = (
-            tbl.style
-            .format(
-                {
-                    "FATURAMENTO": lambda v: "R$ " + format_brl(v),
-                    "CMV": lambda v: "R$ " + format_brl(v),
-                    "COMPRAS": lambda v: "R$ " + format_brl(v),
-                    "DEVOLUÇÕES": lambda v: "R$ " + format_brl(v),
-                    "COMPRAS LÍQ": lambda v: "R$ " + format_brl(v),
-                    # DIF é número normal (sem R$)
-                    "DIF COMPRAS X CMV": _fmt_num,
-                    "MKP VENDAS X CUSTO": _fmt_num,
-                    "MKP COMPRAS X VENDAS": _fmt_num,
-                    "INDICADOR DE COMPRAS": _fmt_num,
-                }
+            sty = (
+                tbl.style
+                .format(
+                    {
+                        "FATURAMENTO": lambda v: "R$ " + format_brl(v),
+                        "CMV": lambda v: "R$ " + format_brl(v),
+                        "COMPRAS": lambda v: "R$ " + format_brl(v),
+                        "DEVOLUÇÕES": lambda v: "R$ " + format_brl(v),
+                        "COMPRAS LÍQ": lambda v: "R$ " + format_brl(v),
+                        # DIF é número normal (sem R$)
+                        "DIF COMPRAS X CMV": _fmt_num,
+                        "MKP VENDAS X CUSTO": _fmt_num,
+                        "MKP COMPRAS X VENDAS": _fmt_num,
+                        "INDICADOR DE COMPRAS": _fmt_num,
+                    }
+                )
+                .pipe(lambda s: styler_map_compat(s, _indicador_style, subset=["INDICADOR DE COMPRAS"]))
             )
-            .pipe(lambda s: styler_map_compat(s, _indicador_style, subset=["INDICADOR DE COMPRAS"]))
-        )
 
-        st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
+            st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
 
 
-# Render no final do dashboard
-_render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
+    # Render no final do dashboard
+    _render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
