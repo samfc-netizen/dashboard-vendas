@@ -2274,7 +2274,6 @@ if pagina_app == "Relatórios":
 # Sidebar filtros
 # =========================
 st.sidebar.header("Filtros")
-modo_bi = st.sidebar.radio("Ambiente de análise", ["Visão Executiva", "Análises detalhadas"], index=0, help="A visão executiva consolida indicadores; análises detalhadas preservam os relatórios originais.")
 
 lojas = sorted([x for x in df["LOJA_N"].dropna().astype(str).unique() if x.strip() != ""])
 opcoes_loja = ["TODAS"] + lojas
@@ -2541,104 +2540,6 @@ with b1:
     st.metric("Diferença (Realizado − Meta) (R$)", "R$ " + format_brl(dif_meta_r))
 with b2:
     st.metric("Diferença (%)", (f"{dif_meta_p:.2f}%".replace(".", ",")) if dif_meta_p is not None else "—")
-
-# ============================================================
-# VISÃO EXECUTIVA | BI COMERCIAL
-# Mantém os cálculos existentes e isola os relatórios detalhados.
-# ============================================================
-if modo_bi == "Visão Executiva":
-    st.markdown("""<style>
-    .bi-section {font-size:1.12rem;font-weight:750;color:#0f2747;margin:1.1rem 0 .5rem}
-    .bi-note {font-size:.85rem;color:#64748b;margin-bottom:.8rem}
-    div[data-testid="stMetric"] {border-top:3px solid #2563eb;min-height:112px}
-    </style>""", unsafe_allow_html=True)
-    st.markdown('<div class="bi-section">Resumo de performance</div>', unsafe_allow_html=True)
-    st.caption(f"Período: {data_ini:%d/%m/%Y} a {data_fim:%d/%m/%Y} | Meses: {', '.join(MES_NUM_TO_NOME[m] for m in mes_nums_sel)}")
-    a, b, c, d = st.columns(4, gap="medium")
-    a.metric("Faturamento realizado", "R$ " + format_brl(real_total_sel),
-             (f"{var_pct_total:+.1f}% vs. {ANO_BASE}" if var_pct_total is not None else None))
-    b.metric("Alcance da meta", f"{pct_meta:.1f}%" if pct_meta is not None else "—",
-             "Meta: R$ " + format_brl(meta_total_sel), delta_color="off")
-    c.metric("Previsão de fechamento", "R$ " + format_brl(previsao_fechamento) if previsao_fechamento is not None else "—",
-             f"{(previsao_fechamento/meta_total_sel*100):.1f}% da meta" if previsao_fechamento is not None and meta_total_sel else None,
-             delta_color="off")
-    d.metric("Saldo para atingir a meta", "R$ " + format_brl(max(meta_total_sel-real_total_sel, 0)),
-             f"{format_decimal_pt(dias_restantes_equiv,1)} dias comerciais restantes", delta_color="off")
-
-    st.markdown('<div class="bi-section">Comparação e alcance</div>', unsafe_allow_html=True)
-    l, r = st.columns(2, gap="large")
-    meses_exibidos = [MES_NUM_TO_NOME[m] for m in mes_nums_sel]
-    mensal_bi = (df_mes.groupby("MES_NUM", as_index=False)[["VENDAS_2025","VENDAS_2026"]].sum()
-                 .sort_values("MES_NUM"))
-    mensal_bi["Mês"] = mensal_bi["MES_NUM"].map(MES_NUM_TO_NOME)
-    with l:
-        st.markdown("**Ano-1 × Ano atual**")
-        fig = go.Figure()
-        fig.add_bar(x=mensal_bi["Mês"], y=mensal_bi["VENDAS_2025"], name=str(ANO_BASE), marker_color="#94a3b8")
-        fig.add_bar(x=mensal_bi["Mês"], y=mensal_bi["VENDAS_2026"], name=str(ANO_ATUAL), marker_color="#2563eb")
-        fig.update_layout(barmode="group", height=305, margin=dict(l=5,r=5,t=10,b=5),
-                          paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-                          legend=dict(orientation="h",y=1.13),yaxis_title="R$",xaxis_title=None)
-        st.plotly_chart(fig, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
-    with r:
-        st.markdown("**Meta × realizado × previsão**")
-        fig = go.Figure()
-        fig.add_bar(y=["Resultado"],x=[real_total_sel],name="Realizado",orientation="h",marker_color="#2563eb")
-        if previsao_fechamento is not None:
-            fig.add_bar(y=["Resultado"],x=[max(previsao_fechamento-real_total_sel,0)],name="Projeção adicional",orientation="h",marker_color="#0f766e")
-        fig.add_vline(x=meta_total_sel,line_dash="dash",line_color="#dc2626",annotation_text="Meta",annotation_position="top")
-        fig.update_layout(barmode="stack",height=240,margin=dict(l=5,r=10,t=35,b=5),
-                          paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-                          legend=dict(orientation="h",y=1.32),xaxis_title="R$")
-        st.plotly_chart(fig,use_container_width=True,config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
-        st.progress(min(max((pct_meta or 0)/100,0),1),text=f"{pct_meta:.1f}% da meta realizada" if pct_meta is not None else "Sem meta cadastrada")
-        st.caption("A projeção utiliza o calendário comercial equivalente já calculado pelo sistema.")
-
-    st.markdown('<div class="bi-section">Evolução do faturamento e tendência</div>', unsafe_allow_html=True)
-    evol = (df_2026.groupby(df_2026["DATA"].dt.date)["FAT_LINHA"].sum().sort_index().cumsum()) if not df_2026.empty else pd.Series(dtype=float)
-    fig_e = go.Figure()
-    if not evol.empty:
-        fig_e.add_scatter(x=list(evol.index),y=evol.values,mode="lines",name="Realizado acumulado",line=dict(color="#2563eb",width=3))
-        if previsao_fechamento is not None and len(evol):
-            fig_e.add_scatter(x=[evol.index[-1],data_fim],y=[float(evol.iloc[-1]),previsao_fechamento],
-                              mode="lines+markers",name="Previsão",line=dict(color="#0f766e",width=3,dash="dash"))
-        fig_e.add_hline(y=meta_total_sel,line_dash="dot",line_color="#dc2626",annotation_text="Meta")
-    fig_e.update_layout(height=285,margin=dict(l=5,r=5,t=10,b=5),paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",legend=dict(orientation="h",y=1.14),yaxis_title="R$",xaxis_title=None)
-    st.plotly_chart(fig_e,use_container_width=True,config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
-
-    st.markdown('<div class="bi-section">Tabela gerencial por loja</div>', unsafe_allow_html=True)
-    loja_real = df_mes.groupby("LOJA_KEY",as_index=False)[["VENDAS_2025","VENDAS_2026"]].sum()
-    loja_meta = df_meta_sel.groupby("LOJA_KEY",as_index=False)["META"].sum()
-    loja_bi = loja_real.merge(loja_meta,on="LOJA_KEY",how="left")
-    loja_bi["Loja"] = loja_bi["LOJA_KEY"].map(lambda k: str(map_key_to_loja.get(k,k)))
-    loja_bi["Crescimento %"] = ((loja_bi["VENDAS_2026"] / loja_bi["VENDAS_2025"].replace(0,float("nan")))-1)*100
-    loja_bi["Alcance %"] = loja_bi["VENDAS_2026"] / loja_bi["META"].replace(0,float("nan"))*100
-    fator_prev = (previsao_fechamento / real_total_sel) if previsao_fechamento is not None and real_total_sel>0 else None
-    loja_bi["Previsão"] = loja_bi["VENDAS_2026"]*fator_prev if fator_prev is not None else float("nan")
-    loja_bi["Previsão × Meta"] = loja_bi["Previsão"]-loja_bi["META"]
-    loja_bi = loja_bi.rename(columns={"VENDAS_2025":"Ano-1","VENDAS_2026":"Realizado","META":"Meta"})
-    loja_bi = loja_bi.sort_values("Realizado",ascending=False)
-    st.dataframe(loja_bi[["Loja","Ano-1","Realizado","Crescimento %","Meta","Alcance %","Previsão","Previsão × Meta"]],
-        use_container_width=True,hide_index=True,height=390,
-        column_config={
-            "Ano-1":st.column_config.NumberColumn(format="R$ %.2f"),
-            "Realizado":st.column_config.NumberColumn(format="R$ %.2f"),
-            "Crescimento %":st.column_config.NumberColumn(format="%.1f%%"),
-            "Meta":st.column_config.NumberColumn(format="R$ %.2f"),
-            "Alcance %":st.column_config.ProgressColumn(format="%.1f%%",min_value=0,max_value=100),
-            "Previsão":st.column_config.NumberColumn(format="R$ %.2f"),
-            "Previsão × Meta":st.column_config.NumberColumn(format="R$ %.2f"),
-        })
-    st.caption("Previsão por loja: rateio proporcional ao realizado no período. Não é uma previsão independente por unidade. Comparativo Ano-1 usa a referência mensal da base de metas.")
-    with st.expander("Metodologia e indicadores complementares"):
-        x,y,z=st.columns(3)
-        x.metric("Média por dia comercial", "R$ "+format_brl(media_por_dia_venda) if media_por_dia_venda is not None else "—")
-        y.metric("Clientes ativos",f"{clientes_ativos:,}".replace(",","."))
-        z.metric("Dias comerciais realizados",format_decimal_pt(dias_venda_equiv,1))
-        st.caption("Segunda a sexta = 1 dia; sábado = 0,5 dia. Dias sem vendas na empresa são desconsiderados conforme regra original.")
-    st.info("Para consultar marcas, segmentos, vendedores, clientes, tabelas completas e drill-down, selecione **Análises detalhadas** no menu lateral.")
-    st.stop()
 
 # ------------------------------------------------------------
 # Tabela Mês x Loja (drill)
