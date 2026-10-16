@@ -9,6 +9,7 @@ from urllib.parse import quote
 import io
 import zipfile
 import json
+import html
 from pathlib import Path
 
 st.set_page_config(page_title="Dashboard de Vendas", layout="wide")
@@ -189,6 +190,43 @@ def aplicar_estilo_visual():
         .bi-alert-value {font-size:clamp(16px,1.5vw,24px); font-weight:800; color:#c62828; overflow-wrap:anywhere;}
         .bi-alert-value.positive {color:#087f66;}
         @media(max-width:850px){.block-container{padding-left:1rem;padding-right:1rem}.hero-card{padding:18px}.hero-card h1{font-size:23px}.bi-heading h2{font-size:19px}}
+
+        /* Alternância automática pelo viewport: sem depender de user-agent ou seleção manual. */
+.bi-mobile-only {display:none;}
+        @media(max-width:767px){.st-key-previsao_desktop{display:none!important;}}
+        .bi-desktop-only {display:block;}
+        .bi-mobile-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+        .bi-mobile-store {background:#fff;border:1px solid #dce6f2;border-radius:16px;padding:15px;margin:10px 0;box-shadow:0 4px 15px rgba(25,61,110,.05);}
+        .bi-mobile-store-head {display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;}
+        .bi-mobile-store-name {font-weight:800;color:#142b52;font-size:15px;}
+        .bi-mobile-cell {background:#f5f8fc;padding:10px;border-radius:10px;min-width:0;}
+        .bi-mobile-cell small {display:block;color:#65758c;font-size:10px;margin-bottom:4px;}
+        .bi-mobile-cell strong {font-size:13px;color:#142b52;overflow-wrap:anywhere;}
+        .bi-positive {color:#c62828!important;}
+        .bi-negative {color:#1565c0!important;}
+        .bi-track {height:7px;background:#e7eef8;border-radius:8px;overflow:hidden;margin-top:6px;}
+        .bi-fill {height:100%;border-radius:8px;background:#1565c0;}
+        .bi-fill.positive {background:#c62828;}
+        .bi-pill {font-size:11px;font-weight:800;padding:5px 9px;border-radius:99px;background:#eaf2ff;color:#1565c0;white-space:nowrap;}
+        .bi-pill.positive {background:#fff0f0;color:#c62828;}
+        @media(max-width:767px){
+          .bi-desktop-only {display:none!important;}
+          .bi-mobile-only {display:block!important;}
+          .block-container {padding-left:.75rem!important;padding-right:.75rem!important;padding-top:.5rem!important;}
+          .hero-card {padding:17px!important;border-radius:15px!important;}
+          .hero-card h1 {font-size:20px!important;}
+          .hero-card p {font-size:12px!important;}
+          div[data-testid="stHorizontalBlock"] {flex-wrap:wrap!important;}
+          div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {min-width:min(100%,155px)!important;flex:1 1 155px!important;}
+          div[data-testid="stMetric"] {padding:12px!important;min-height:85px!important;}
+          div[data-testid="stMetricValue"] {font-size:20px!important;}
+          div[data-testid="stTabs"] [data-baseweb="tab-list"] {overflow-x:auto;flex-wrap:nowrap;scrollbar-width:thin;}
+          div[data-testid="stTabs"] button[data-baseweb="tab"] {white-space:nowrap;font-size:12px;padding:10px;}
+          div[data-testid="stDataFrame"] {max-width:100%;}
+          .bi-goal {padding:13px!important;}
+          .bi-goal-values {flex-wrap:wrap;font-size:13px!important;}
+          .bi-heading h2 {font-size:18px!important;}
+        }
 
         textarea, input { color: #111827 !important; }
         </style>
@@ -629,6 +667,44 @@ LOJA_KEY_RANK = {k: i for i, k in enumerate(LOJA_KEY_ORDER)}
 DEFAULT_RANK = 10_000
 
 
+def tabela_previsao_mobile(df):
+    """Cards mobile com os mesmos números calculados para a tabela desktop."""
+    def moeda(v):
+        return "R$ " + format_brl(v) if pd.notna(v) else "—"
+    def pct(v):
+        return (format_decimal_pt(v, 2) + "%") if pd.notna(v) else "—"
+    def celula(label, value, cls="", barra=None):
+        track = ""
+        if barra is not None and pd.notna(barra):
+            width = max(0, min(100, float(barra)))
+            track = f'<div class="bi-track"><div class="bi-fill {"positive" if float(barra)>=100 else ""}" style="width:{width:.2f}%"></div></div>'
+        return f'<div class="bi-mobile-cell"><small>{html.escape(label)}</small><strong class="{cls}">{html.escape(str(value))}</strong>{track}</div>'
+    blocks=[]
+    for _, r in df.iterrows():
+        ating = r['ATING_META_%']
+        positive = pd.notna(ating) and ating >= 100
+        pill = 'positive' if positive else ''
+        dif_meta = r['DIF_PREV_X_META_R$']
+        dif_ano = r['DIF_PREV_X_ANO1_R$']
+        crescimento = r['CRESC_%']
+        def classe(v):
+            return 'bi-positive' if pd.notna(v) and v > 0 else 'bi-negative' if pd.notna(v) and v < 0 else ''
+        cells = [
+            celula('Realizado', moeda(r['REALIZADO_R$'])),
+            celula('Previsão', moeda(r['PREVISAO_R$'])),
+            celula('Meta', moeda(r['META_R$'])),
+            celula('Atingimento', pct(ating), 'bi-positive' if positive else 'bi-negative', ating),
+            celula('Ano anterior', moeda(r['ANO_1_R$'])),
+            celula('Crescimento', pct(crescimento), classe(crescimento)),
+            celula('Diferença x meta', moeda(dif_meta), classe(dif_meta)),
+            celula('Diferença x ano anterior', moeda(dif_ano), classe(dif_ano)),
+            celula('Média por dia', moeda(r['MEDIA_DIA_R$'])),
+            celula('Dias de venda', format_decimal_pt(r['DIAS_VENDA'],1)),
+        ]
+        blocks.append(f'<div class="bi-mobile-store"><div class="bi-mobile-store-head"><span class="bi-mobile-store-name">{html.escape(str(r["LOJA"]))}</span><span class="bi-pill {pill}">{pct(ating)} da meta</span></div><div class="bi-mobile-grid">{"".join(cells)}</div></div>')
+    st.markdown('<div class="bi-mobile-only">'+''.join(blocks)+'</div>', unsafe_allow_html=True)
+
+
 def color_pos_neg(v):
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return ""
@@ -637,9 +713,9 @@ def color_pos_neg(v):
     except Exception:
         return ""
     if x > 0:
-        return "color: #1f77b4; font-weight: 700;"  # azul
+        return "color: #c62828; font-weight: 700;"  # vermelho
     if x < 0:
-        return "color: #d62728; font-weight: 700;"  # vermelho
+        return "color: #1565c0; font-weight: 700;"  # azul
     return ""
 
 
@@ -3033,7 +3109,27 @@ with aba_resumo:
         prev_view_fmt["DIF_PREV_X_META_R$"] = prev_view_fmt["DIF_PREV_X_META_R$"].apply(lambda v: ("R$ " + format_brl(v)) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
         prev_view_fmt["ATING_META_%"] = prev_view_fmt["ATING_META_%"].apply(lambda v: (f"{v:.2f}%".replace(".", ",")) if v is not None and not (isinstance(v, float) and pd.isna(v)) else "—")
 
-        st.dataframe(prev_view_fmt, use_container_width=True, hide_index=True, height=520)
+        # A tabela detalhada é exibida no desktop; no celular os mesmos dados
+        # aparecem automaticamente como cards sem rolagem horizontal.
+        sty_prev = prev_view.style.apply(row_total_style, axis=1)
+        for col in ['DIF_PREV_X_ANO1_R$', 'CRESC_%', 'DIF_PREV_X_META_R$']:
+            sty_prev = styler_map_compat(sty_prev, color_pos_neg, subset=[col])
+        sty_prev = sty_prev.bar(subset=['ATING_META_%'], color='#c62828', vmin=0, vmax=120, width=80, height=52)
+        sty_prev = sty_prev.format({
+            'REALIZADO_R$': lambda v: 'R$ '+format_brl(v),
+            'DIAS_VENDA': lambda v: format_decimal_pt(v, 1),
+            'MEDIA_DIA_R$': lambda v: 'R$ '+format_brl(v),
+            'PREVISAO_R$': lambda v: 'R$ '+format_brl(v),
+            'ANO_1_R$': lambda v: 'R$ '+format_brl(v),
+            'DIF_PREV_X_ANO1_R$': lambda v: 'R$ '+format_brl(v),
+            'CRESC_%': lambda v: format_decimal_pt(v, 2)+'%',
+            'META_R$': lambda v: 'R$ '+format_brl(v),
+            'DIF_PREV_X_META_R$': lambda v: 'R$ '+format_brl(v),
+            'ATING_META_%': lambda v: format_decimal_pt(v, 2)+'%',
+        }, na_rep='—')
+        with st.container(key="previsao_desktop"):
+            st.dataframe(sty_prev, use_container_width=True, hide_index=True, height=420)
+        tabela_previsao_mobile(prev_view)
 
 
     # ------------------------------------------------------------
