@@ -154,6 +154,42 @@ def aplicar_estilo_visual():
             margin: 10px 0 14px 0;
             color: #7c2d12;
         }
+        /* DAUTO BI | identidade visual unificada */
+        .stApp {background:#f4f7fc !important; color:#142443;}
+        .block-container {max-width:1680px; padding-top:1.1rem; padding-bottom:3rem;}
+        h1,h2,h3 {color:#10234a !important; letter-spacing:-.035em; font-weight:760 !important;}
+        h3 {font-size:1.28rem !important; margin-top:1.2rem !important;}
+        div[data-testid="stMetric"] {border:1px solid #e0e9f5 !important; border-radius:15px !important; box-shadow:0 4px 18px rgba(25,61,110,.045) !important; min-height:100px; padding:16px 18px !important;}
+        div[data-testid="stMetricValue"] {color:#10244e !important; font-weight:780 !important;}
+        div[data-testid="stMetricLabel"] {color:#61738e !important; font-weight:650 !important;}
+        div[data-testid="stDataFrame"] {border:1px solid #dce6f2 !important; border-radius:14px !important; box-shadow:0 4px 18px rgba(25,61,110,.04); background:#fff;}
+        div[data-testid="stDataFrame"] [role="columnheader"] {background:#183454 !important; color:#fff !important; font-weight:700 !important;}
+        div[data-testid="stDataFrame"] [role="gridcell"] {border-color:#eaf0f7 !important;}
+        div[data-testid="stExpander"] {background:#fff; border:1px solid #dce6f2; border-radius:14px !important; overflow:hidden; margin-bottom:12px;}
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(> div > div[data-testid="stVerticalBlock"]) {border-radius:16px;}
+        div[data-testid="stTabs"] button[data-baseweb="tab"] {border-radius:10px 10px 0 0; font-size:13px; padding:12px 16px;}
+        div[data-testid="stTabs"] button[aria-selected="true"] {color:#1261d6 !important; background:#eaf2ff !important;}
+        div[data-testid="stPlotlyChart"] {background:#fff; border:1px solid #e0e9f5; border-radius:15px; padding:8px; box-shadow:0 4px 18px rgba(25,61,110,.04);}
+        .hero-card {background:linear-gradient(115deg,#123a73 0%,#165ed3 60%,#102448 100%); border-radius:18px; padding:23px 28px; margin-bottom:15px; box-shadow:0 12px 30px rgba(16,58,117,.12);}
+        .hero-card h1 {font-size:27px; color:white !important;}
+        .hero-card p {font-size:13px;}
+        .bi-heading {display:flex; gap:12px; align-items:center; padding:10px 0 14px; margin-top:14px;}
+        .bi-icon {display:grid; place-items:center; width:42px; height:42px; border-radius:12px; background:linear-gradient(145deg,#1263df,#0e448f); color:#fff; font-size:22px; font-weight:800; box-shadow:0 5px 12px rgba(24,94,200,.15);}
+        .bi-heading h2 {margin:0; font-size:22px; color:#10234a; line-height:1.15;}
+        .bi-heading p {margin:4px 0 0; font-size:12px; color:#71819a;}
+        .bi-goal {background:white; border:1px solid #e0e9f5; border-radius:16px; padding:20px 22px; box-shadow:0 4px 18px rgba(25,61,110,.045); margin:8px 0 15px;}
+        .bi-goal-title {font-size:14px; font-weight:750; color:#15294e; margin-bottom:16px;}
+        .bi-goal-values {display:flex; justify-content:space-between; gap:12px; color:#183454; font-size:16px; font-weight:760;}
+        .bi-goal-values small {display:block; color:#71819a; font-size:11px; font-weight:500; margin-top:4px;}
+        .bi-progress {height:24px; background:#e5edf7; border-radius:99px; overflow:hidden; margin-top:16px;}
+        .bi-progress span {height:100%; display:flex; align-items:center; justify-content:center; background:linear-gradient(90deg,#1253b8,#2475ed); border-radius:99px; color:white; font-size:12px; font-weight:750; min-width:0; white-space:nowrap;}
+        .bi-scale {display:flex; justify-content:space-between; color:#8a9ab1; font-size:10px; margin-top:9px;}
+        .bi-alert {background:#fff; border:1px solid #e4eaf3; border-radius:14px; padding:16px; margin:7px 0; box-shadow:0 4px 18px rgba(25,61,110,.04);}
+        .bi-alert-label {font-size:12px; color:#687b97; margin-bottom:6px;}
+        .bi-alert-value {font-size:clamp(16px,1.5vw,24px); font-weight:800; color:#c62828; overflow-wrap:anywhere;}
+        .bi-alert-value.positive {color:#087f66;}
+        @media(max-width:850px){.block-container{padding-left:1rem;padding-right:1rem}.hero-card{padding:18px}.hero-card h1{font-size:23px}.bi-heading h2{font-size:19px}}
+
         textarea, input { color: #111827 !important; }
         </style>
         """,
@@ -161,12 +197,29 @@ def aplicar_estilo_visual():
     )
 
 
+def bi_plotly_chart(fig, *args, **kwargs):
+    """Aplica visual institucional aos gráficos, sem modificar os dados."""
+    try:
+        fig.update_layout(
+            paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+            font=dict(family="Arial, sans-serif", color="#344968", size=12),
+            title_font=dict(size=17, color="#10234a"),
+            legend=dict(bgcolor="rgba(255,255,255,0)"),
+            margin=dict(l=25, r=20, t=55, b=35),
+        )
+        fig.update_xaxes(showgrid=False, linecolor="#e5edf6", tickfont=dict(color="#64748b"))
+        fig.update_yaxes(gridcolor="#edf2f8", zerolinecolor="#e5edf6", tickfont=dict(color="#64748b"))
+    except Exception:
+        pass
+    return st.plotly_chart(fig, *args, **kwargs)
+
+
 def render_header():
     st.markdown(
         """
         <div class="hero-card">
-            <h1>Dashboard de Vendas Dauto Tintas</h1>
-            <p>Indicadores comerciais, comparativos e relatórios prontos para WhatsApp.</p>
+            <h1>DAUTO TINTAS | Inteligência Comercial</h1>
+            <p>Performance de vendas, metas, clientes e resultados em uma única plataforma.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -601,7 +654,7 @@ def styler_map_compat(styler, func, subset=None):
 
 def row_total_style(row):
     if str(row.get("LOJA", "")).upper() == "TOTAL":
-        return ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
+        return ["background-color: #e9f1ff; color: #10234a; font-weight: 900;"] * len(row)
     return [""] * len(row)
 
 
@@ -2439,7 +2492,7 @@ with aba_resumo:
     # ============================================================
     # KPI: META x REALIZADO (velocímetro)
     # ============================================================
-    st.markdown("### Meta × Realizado")
+    st.markdown("""<div class="bi-heading"><div class="bi-icon">↗</div><div><h2>Meta × Realizado</h2><p>Resultados e ritmo de fechamento</p></div></div>""", unsafe_allow_html=True)
 
     # Meta agora vem preferencialmente da planilha METAS.xlsx, aba META DAUTO TINTAS.
     # Se a planilha auxiliar não existir ou estiver vazia, mantém os valores fixos antigos como fallback.
@@ -2496,7 +2549,7 @@ with aba_resumo:
     dif_meta_r = real_total_sel - meta_total_sel
     dif_meta_p = (dif_meta_r / meta_total_sel * 100) if meta_total_sel != 0 else None
 
-    st.markdown("### Indicadores de desempenho")
+    st.markdown("""<div class="bi-heading"><div class="bi-icon">▥</div><div><h2>Indicadores de desempenho</h2><p>Resumo executivo do período e das lojas selecionadas</p></div></div>""", unsafe_allow_html=True)
     kp1, kp2, kp3, kp4 = st.columns(4, gap="medium")
     kp1.metric(f"Ano-1 ({ANO_BASE})", "R$ " + format_brl(total_2025))
     kp2.metric("Realizado", "R$ " + format_brl(real_total_sel),
@@ -2504,7 +2557,7 @@ with aba_resumo:
     kp3.metric("Média por dia de venda", "R$ " + format_brl(media_por_dia_venda) if media_por_dia_venda is not None else "—")
     kp4.metric("Clientes ativos", f"{clientes_ativos:,}".replace(",", "."))
     kp5, kp6, kp7, kp8 = st.columns(4, gap="medium")
-    kp5.metric("Meta", "R$ " + format_brl(meta_total_sel))
+    kp5.metric("Meta do período", "R$ " + format_brl(meta_total_sel))
     kp6.metric("Previsão de fechamento", "R$ " + format_brl(previsao_fechamento) if previsao_fechamento is not None else "—")
     kp7.metric("Dias comerciais realizados", format_decimal_pt(dias_venda_equiv, 1))
     kp8.metric("Dias comerciais restantes", format_decimal_pt(dias_restantes_equiv, 1))
@@ -2515,47 +2568,50 @@ with aba_resumo:
         + (f" Dias ignorados no recorte: {', '.join(dias_ignorados_periodo)}." if dias_ignorados_periodo else "")
     )
 
-    a1, a2, a3 = st.columns([1.0, 1.0, 1.6], gap="large")
-    with a1:
-        st.metric("Meta (R$)", "R$ " + format_brl(meta_total_sel))
-    with a2:
-        st.metric("Realizado (R$)", "R$ " + format_brl(real_total_sel))
-    with a3:
+    goal_col, gauge_col, gap_col = st.columns([1.65, 1.0, 1.0], gap="medium")
+    with goal_col:
+        _progresso = max(0.0, min(float(pct_meta or 0.0), 100.0))
+        _largura = f"{_progresso:.2f}%"
+        _rotulo = (format_decimal_pt(pct_meta, 1) + "%") if pct_meta is not None else "Sem meta"
+        st.markdown(
+            f'<div class="bi-goal"><div class="bi-goal-title">Evolução da meta</div>'
+            f'<div class="bi-goal-values"><div>R$ {format_brl(real_total_sel)}<small>Realizado</small></div>'
+            f'<div style="text-align:right">R$ {format_brl(meta_total_sel)}<small>Meta</small></div></div>'
+            f'<div class="bi-progress"><span style="width:{_largura}">{_rotulo if _progresso >= 18 else ""}</span></div>'
+            f'<div class="bi-scale"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div></div>',
+            unsafe_allow_html=True,
+        )
+    with gauge_col:
         if pct_meta is None:
-            st.info("Meta zerada para o recorte selecionado (não é possível calcular %).")
+            st.info("Meta zerada para o recorte selecionado.")
         else:
-            max_axis = 120
-            val = max(0, pct_meta)
-            fig_gauge = go.Figure(
-                go.Indicator(
-                    mode="gauge+number",
-                    value=val,
-                    number={"suffix": "%", "valueformat": ".1f"},
-                    title={"text": "% da meta atingida"},
-                    gauge={
-                        "axis": {"range": [0, max_axis]},
-                        "bar": {"color": "#1f77b4"},
-                        "steps": [
-                            {"range": [0, 80], "color": "#f2f2f2"},
-                            {"range": [80, 100], "color": "#e6e6e6"},
-                            {"range": [100, max_axis], "color": "#d9d9d9"},
-                        ],
-                        "threshold": {"line": {"color": "#d62728", "width": 3}, "thickness": 0.75, "value": 100},
-                    },
-                )
-            )
-            fig_gauge.update_layout(margin=dict(l=20, r=20, t=60, b=10), height=260)
-            st.plotly_chart(fig_gauge, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
-
-    b1, b2 = st.columns(2)
-    with b1:
-        st.metric("Diferença (Realizado − Meta) (R$)", "R$ " + format_brl(dif_meta_r))
-    with b2:
-        st.metric("Diferença (%)", (f"{dif_meta_p:.2f}%".replace(".", ",")) if dif_meta_p is not None else "—")
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number", value=max(0, pct_meta),
+                number={"suffix": "%", "valueformat": ".1f", "font": {"size": 35, "color": "#10234a"}},
+                title={"text": "% da meta atingida", "font": {"size": 14, "color": "#183454"}},
+                gauge={"axis": {"range": [0, 120], "tickcolor": "#91a1b6", "tickfont": {"size": 9}},
+                       "bar": {"color": "#1b69e2", "thickness": 0.45},
+                       "bgcolor": "white", "borderwidth": 0,
+                       "steps": [{"range": [0, 80], "color": "#edf2f9"},
+                                 {"range": [80, 100], "color": "#e2eaf5"},
+                                 {"range": [100, 120], "color": "#d6e2f1"}],
+                       "threshold": {"line": {"color": "#d73535", "width": 3}, "thickness": 0.8, "value": 100}},
+            ))
+            fig_gauge.update_layout(margin=dict(l=10, r=10, t=44, b=0), height=214,
+                                    paper_bgcolor="white", font=dict(family="Arial", color="#183454"))
+            bi_plotly_chart(fig_gauge, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+    with gap_col:
+        _dif_cor = "positive" if dif_meta_r >= 0 else ""
+        st.markdown(
+            f'<div class="bi-alert"><div class="bi-alert-label">Diferença (Realizado − Meta)</div>'
+            f'<div class="bi-alert-value {_dif_cor}">R$ {format_brl(dif_meta_r)}</div></div>'
+            f'<div class="bi-alert"><div class="bi-alert-label">Diferença percentual</div>'
+            f'<div class="bi-alert-value {_dif_cor}">{format_decimal_pt(dif_meta_p, 2) if dif_meta_p is not None else "—"}%</div></div>',
+            unsafe_allow_html=True,
+        )
 
     # RELATÓRIO PRINCIPAL — faturamento diário das lojas
-    st.markdown("### Faturamento diário por loja")
-    st.caption("Tabela gerencial com totalização, detalhamento por unidade e os filtros selecionados.")
+    st.markdown("""<div class="bi-heading"><div class="bi-icon">▦</div><div><h2>Faturamento diário por loja</h2><p>Tabela gerencial, totalização e detalhamento por unidade</p></div></div>""", unsafe_allow_html=True)
     # ------------------------------------------------------------
     # Vendas Diárias por Loja — visão geral + drill por loja
     # Baseado no mesmo recorte/filtros ativos do dashboard.
@@ -2618,9 +2674,9 @@ with aba_resumo:
                 sty_diario = (
                     matriz_view.style
                     .apply(
-                        lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
+                        lambda row: ["background-color: #e9f1ff; color: #10234a; font-weight: 900;"] * len(row)
                         if str(row.get("DATA", "")).upper() == "TOTAIS"
-                        else ["" if row.name % 2 == 0 else "background-color: #f8fafc;"] * len(row),
+                        else ["" if row.name % 2 == 0 else "background-color: #f4f8fe;"] * len(row),
                         axis=1,
                     )
                     .format({c: lambda v: "R$ " + format_brl(v) for c in cols_valor_diario})
@@ -2690,9 +2746,9 @@ with aba_resumo:
                 sty_drill = (
                     drill_view.style
                     .apply(
-                        lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
+                        lambda row: ["background-color: #e9f1ff; color: #10234a; font-weight: 900;"] * len(row)
                         if str(row.get("DATA", "")).upper() == "TOTAIS"
-                        else ["" if row.name % 2 == 0 else "background-color: #f8fafc;"] * len(row),
+                        else ["" if row.name % 2 == 0 else "background-color: #f4f8fe;"] * len(row),
                         axis=1,
                     )
                     .format({
@@ -2762,7 +2818,7 @@ with aba_resumo:
         styler_tbl = (
             df_tbl_disp.style
             .apply(
-                lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row)
+                lambda row: ["background-color: #e9f1ff; color: #10234a; font-weight: 900;"] * len(row)
                 if str(row.get("LOJA", "")).upper() == "TOTAL"
                 else [""] * len(row),
                 axis=1,
@@ -2846,7 +2902,7 @@ with aba_resumo:
 
         sty = (
             view.style
-            .apply(lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
+            .apply(lambda row: ["background-color: #e9f1ff; color: #10234a; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
             .format(
                 {
                     "META_R$": lambda v: "R$ " + format_brl(v),
@@ -3007,7 +3063,7 @@ with aba_resumo:
         title=f"Vendas Mensais: {ANO_BASE} x {ANO_ATUAL} (Lojas do filtro)",
     )
     fig_comp.update_layout(yaxis_title="Vendas (R$)", xaxis_title="Mês")
-    st.plotly_chart(fig_comp, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+    bi_plotly_chart(fig_comp, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
     st.divider()
 
@@ -3032,7 +3088,7 @@ with aba_vendas:
 
         fig_loja = px.bar(vendas_loja, x="LOJA", y="Faturamento", title="Vendas por Loja (QTD × UNIT)")
         fig_loja.update_layout(xaxis_tickangle=-30, yaxis_title="Faturamento (R$)", xaxis_title="Loja")
-        st.plotly_chart(fig_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+        bi_plotly_chart(fig_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
         st.markdown(f"**Total (todas as lojas do filtro): R$ {format_brl(fat_total)}**")
 
@@ -3197,7 +3253,7 @@ with aba_marcas:
                 xaxis_title="Faturamento (R$)",
                 yaxis_title="Loja",
             )
-            st.plotly_chart(fig_mxl, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+            bi_plotly_chart(fig_mxl, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
         st.markdown("#### Ranking de Vendedores")
         vendedores_mxl = (
@@ -3278,7 +3334,7 @@ with aba_vendas:
             title="Top Vendedores (QTD × UNIT)",
         )
         fig_vend.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="Faturamento (R$)", yaxis_title="Vendedor")
-        st.plotly_chart(fig_vend, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+        bi_plotly_chart(fig_vend, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
         with st.expander("Ver todos os vendedores"):
             vend_full = vendedores.copy()
@@ -3349,7 +3405,7 @@ with aba_vendas:
         )
 
         fig_seg = px.pie(segmento, names="SEGMENTO", values="Faturamento", title="Participação por Segmento (QTD × UNIT)")
-        st.plotly_chart(fig_seg, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+        bi_plotly_chart(fig_seg, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
         segmento_tbl = segmento.copy()
         segmento_tbl["Faturamento (R$)"] = segmento_tbl["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
@@ -3432,7 +3488,7 @@ with aba_vendas:
                 legend_title="Segmento Gerencial",
                 height=520,
             )
-            st.plotly_chart(fig_seg_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+            bi_plotly_chart(fig_seg_loja, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
             st.markdown("##### Tabela detalhada")
             tabela_seg = seg_loja.pivot_table(
@@ -3478,7 +3534,7 @@ with aba_vendas:
 
             sty_seg = (
                 tabela_final.style
-                .apply(lambda row: ["background-color: #f2f2f2; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
+                .apply(lambda row: ["background-color: #e9f1ff; color: #10234a; font-weight: 900;"] * len(row) if str(row.get("LOJA", "")).upper() == "TOTAL" else [""] * len(row), axis=1)
                 .format(format_cols)
             )
 
@@ -3658,7 +3714,7 @@ with aba_marcas:
                 xaxis_title="Faturamento (R$)",
                 yaxis_title="Marca",
             )
-            st.plotly_chart(fig_ml, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+            bi_plotly_chart(fig_ml, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
     st.divider()
 
@@ -3715,7 +3771,7 @@ with aba_clientes:
             xaxis_title="VR TOTAL (R$)",
             yaxis_title="Cliente",
         )
-        st.plotly_chart(fig_cli, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+        bi_plotly_chart(fig_cli, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
     st.divider()
 
@@ -3821,7 +3877,7 @@ with aba_clientes:
                 title="Top Linhas deste Cliente",
             )
             fig_lc.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="VR TOTAL (R$)", yaxis_title="Linha")
-            st.plotly_chart(fig_lc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+            bi_plotly_chart(fig_lc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
         st.divider()
 
@@ -3880,7 +3936,7 @@ with aba_clientes:
                 title="Top Marcas nesta Linha (Cliente)",
             )
             fig_mc.update_layout(yaxis={"categoryorder": "total ascending"}, xaxis_title="VR TOTAL (R$)", yaxis_title="Marca")
-            st.plotly_chart(fig_mc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
+            bi_plotly_chart(fig_mc, use_container_width=True, config=PLOT_CONFIG_INTERACTIVE_NO_ZOOM)
 
 
     # ============================================================
