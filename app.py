@@ -2418,75 +2418,10 @@ def _compras_mensal_resumo():
     base["LOJA_N"] = base["LOJA_N"].astype(str)
     return base
 
-def _pagina_compras_mensal():
-    st.title("Indicadores de Compras | Matriz mensal")
-    st.caption("Todas as lojas e meses em uma única consulta. Não utiliza os filtros do Dashboard.")
-    base = _compras_mensal_resumo()
-    if base.empty:
-        st.warning("Não foram encontrados dados nas planilhas.")
-        return
-    anos = sorted(base["ANO"].dropna().astype(int).unique().tolist(), reverse=True)
-    ano = st.selectbox("Ano", anos, key="compras_matriz_ano")
-    base = base.loc[base["ANO"] == ano].copy()
-    base["COMPRAS LÍQ"] = base["COMPRAS"] - base["DEVOLUÇÕES"]
-    base["DIF COMPRAS X CMV"] = base["CMV"] - base["COMPRAS LÍQ"]
-    base["MKP VENDAS X CUSTO"] = base["FATURAMENTO"].div(base["CMV"].replace(0, float("nan")))
-    base["MKP COMPRAS X VENDAS"] = base["FATURAMENTO"].div(base["COMPRAS LÍQ"].replace(0, float("nan")))
-    base["INDICADOR DE COMPRAS"] = base["MKP COMPRAS X VENDAS"] - base["MKP VENDAS X CUSTO"]
-    metricas = [
-        "INDICADOR DE COMPRAS", "FATURAMENTO", "CMV", "MKP VENDAS X CUSTO",
-        "COMPRAS", "DEVOLUÇÕES", "COMPRAS LÍQ", "MKP COMPRAS X VENDAS",
-        "DIF COMPRAS X CMV",
-    ]
-    nomes = {1:"JAN", 2:"FEV", 3:"MAR", 4:"ABR", 5:"MAI", 6:"JUN",
-             7:"JUL", 8:"AGO", 9:"SET", 10:"OUT", 11:"NOV", 12:"DEZ"}
-    st.markdown("**Visão consolidada — lojas nas linhas e meses nas colunas**")
-    tabs = st.tabs(["Indicador", "Faturamento", "CMV", "Markup vendas/custo",
-                    "Compras", "Devoluções", "Compras líquidas",
-                    "Markup vendas/compras", "Diferença compras/CMV"])
-    # Apenas ~12 x número de lojas por tabela; sem Styled DataFrames volumosos.
-    for tab, metrica in zip(tabs, metricas):
-        with tab:
-            matriz = base.pivot_table(index="LOJA_N", columns="MES",
-                                      values=metrica, aggfunc="first")
-            matriz = matriz.reindex(columns=range(1,13))
-            # TOTAL: razões são recalculadas sobre os somatórios, nunca somadas.
-            totais = base.groupby("MES")[["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES"]].sum()
-            liq = totais["COMPRAS"] - totais["DEVOLUÇÕES"]
-            total_metricas = {
-                "FATURAMENTO": totais["FATURAMENTO"],
-                "CMV": totais["CMV"],
-                "COMPRAS": totais["COMPRAS"],
-                "DEVOLUÇÕES": totais["DEVOLUÇÕES"],
-                "COMPRAS LÍQ": liq,
-                "DIF COMPRAS X CMV": totais["CMV"] - liq,
-                "MKP VENDAS X CUSTO": totais["FATURAMENTO"].div(totais["CMV"].replace(0, float("nan"))),
-                "MKP COMPRAS X VENDAS": totais["FATURAMENTO"].div(liq.replace(0, float("nan"))),
-            }
-            total_metricas["INDICADOR DE COMPRAS"] = (
-                total_metricas["MKP COMPRAS X VENDAS"] - total_metricas["MKP VENDAS X CUSTO"])
-            matriz.loc["TOTAL"] = total_metricas[metrica].reindex(range(1,13))
-            matriz = matriz.rename(columns=nomes).reset_index().rename(columns={"LOJA_N":"LOJA"})
-            razao = metrica.startswith("MKP") or metrica == "INDICADOR DE COMPRAS"
-            colunas_meses = list(nomes.values())
-            exibicao = matriz.copy()
-            for col in colunas_meses:
-                exibicao[col] = exibicao[col].map(
-                    lambda x: ("—" if pd.isna(x) else
-                               (format_decimal_pt(x, 3) if razao else "R$ " + format_brl(x))))
-            st.dataframe(exibicao, use_container_width=True, hide_index=True,
-                         height=min(560, 80 + 36*len(exibicao)))
-    st.caption("Cálculos: compras líquidas = compras − devoluções; indicador = "
-               "(faturamento ÷ compras líquidas) − (faturamento ÷ CMV). "
-               "O TOTAL recalcula as razões a partir dos valores consolidados.")
-
 # =========================
 # Carrega e prepara base
 # =========================
-pagina_app = st.sidebar.radio("Página", ["Indicadores de Compras", "Dashboard", "Campanhas", "Relatórios"], index=0)
-if pagina_app == "Indicadores de Compras":
-    _pagina_compras_mensal()
-    st.stop()
+pagina_app = st.sidebar.radio("Página", ["Dashboard", "Campanhas", "Relatórios"], index=0)
 
 df = carregar_dados()
 df = df.loc[df["FAT_LINHA"].notna()]
@@ -4225,204 +4160,62 @@ with aba_clientes:
     st.divider()
 
 with aba_compras:
-    st.markdown("#### Compras, CMV e auditoria dos dados")
-
-    with st.expander("Ver base filtrada (conferência)"):
-        st.caption("Prévia limitada a 300 registros para preservar memória e conexão.")
-        if st.button("Carregar prévia da base", key="compras_previa_btn"):
-            st.dataframe(df_f.head(300), use_container_width=True, height=420)
-
-    # ============================================================
-    # Indicador de Compras (Base + COMPRAS + DEVOLUÇÕES) - DRILL
-    # ============================================================
-    def _safe_div(num: float, den: float):
-        try:
-            if den in (0, None) or (isinstance(den, float) and pd.isna(den)):
-                return None
-            return float(num) / float(den)
-        except Exception:
-            return None
-
-
-    def _fmt_num(v):
-        if v is None or (isinstance(v, float) and pd.isna(v)):
-            return "—"
-        try:
-            return f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        except Exception:
-            return "—"
-
-
-    def _indicador_style(v):
-        if v is None or (isinstance(v, float) and pd.isna(v)):
-            return ""
-        try:
-            x = float(v)
-        except Exception:
-            return ""
-
-        # > 0,00 azul
-        if x > 0:
-            return "background-color: #D9E8FF; color: #0B3D91; font-weight: 700;"
-        # entre -0,01 e -0,09 verde
-        if -0.09 <= x <= -0.01:
-            return "background-color: #DFF5E1; color: #1B5E20; font-weight: 700;"
-        # entre -0,10 e -0,15 amarelo
-        if -0.15 <= x <= -0.10:
-            return "background-color: #FFF4CC; color: #7A5A00; font-weight: 700;"
-        # abaixo de -0,15 vermelho
-        if x < -0.15:
-            return "background-color: #FFD6D6; color: #8A1C1C; font-weight: 700;"
-        return ""
-
-
-    def _calc_indicador_compras_por_loja(df_f: pd.DataFrame, df_compras: pd.DataFrame, df_devol: pd.DataFrame,
-                                        lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None) -> pd.DataFrame:
-        # ===== Base (Vendas) por loja: FATURAMENTO + CMV (coluna T -> CUSTO_T_NUM)
-        if df_f is None or df_f.empty:
-            base = pd.DataFrame({"LOJA": [], "FATURAMENTO": [], "CMV": []})
-        else:
-            base = (
-                df_f.groupby("LOJA_N", dropna=False, observed=True)
-                .agg(FATURAMENTO=("FAT_LINHA", "sum"), CMV=("CUSTO_T_NUM", "sum"))
-                .reset_index()
-                .rename(columns={"LOJA_N": "LOJA"})
-            )
-
-        # ===== Recorte compras/devoluções (loja + data)
-        def _aplicar_recorte_mov(dfm: pd.DataFrame) -> pd.DataFrame:
-            if dfm is None or dfm.empty:
-                return pd.DataFrame(columns=["LOJA_N", "TOT_DOC_NUM", "DATA"])
-
-            out = dfm
-            if lojas_sel_aplicadas:
-                out = out[out["LOJA_N"].isin(lojas_sel_aplicadas)]
-
-            if "DATA" in out.columns and out["DATA"].notna().any():
-                out = out[out["DATA"].notna()]
-                out = out[(out["DATA"] >= pd.Timestamp(data_ini)) & (out["DATA"] < (pd.Timestamp(data_fim) + pd.Timedelta(days=1)))]
-                if mes_nums_sel:
-                    out = out[out["DATA"].dt.month.isin(mes_nums_sel)]
-            return out
-
-        comp_f = _aplicar_recorte_mov(df_compras)
-        dev_f = _aplicar_recorte_mov(df_devol)
-
-        comp_by = (
-            comp_f.groupby("LOJA_N", dropna=False, observed=True)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "COMPRAS"})
-            if not comp_f.empty else pd.DataFrame({"LOJA": [], "COMPRAS": []})
-        )
-        dev_by = (
-            dev_f.groupby("LOJA_N", dropna=False, observed=True)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "DEVOLUÇÕES"})
-            if not dev_f.empty else pd.DataFrame({"LOJA": [], "DEVOLUÇÕES": []})
-        )
-
-        # ===== Consolida tudo por loja (outer para não perder loja que só exista em uma fonte)
-        out = base.merge(comp_by, on="LOJA", how="outer").merge(dev_by, on="LOJA", how="outer")
-
-        # Preenche nulos
-        for c in ["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES"]:
-            if c in out.columns:
-                out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
-
-        out["COMPRAS LÍQ"] = out["COMPRAS"] - out["DEVOLUÇÕES"]
-        out["MKP VENDAS X CUSTO"] = out["FATURAMENTO"].div(out["CMV"].replace(0, float("nan")))
-        out["MKP COMPRAS X VENDAS"] = out["FATURAMENTO"].div(out["COMPRAS LÍQ"].replace(0, float("nan")))
-        out["DIF COMPRAS X CMV"] = out["CMV"] - out["COMPRAS LÍQ"]
-        out["INDICADOR DE COMPRAS"] = out["MKP COMPRAS X VENDAS"] - out["MKP VENDAS X CUSTO"]
-
-        # Ordena (opcional)
-        out = out.sort_values("LOJA", key=lambda s: s.astype(str)).reset_index(drop=True)
-
-        # ===== Linha TOTAL (soma valores e recalcula razões no total)
-        total_fat = float(out["FATURAMENTO"].sum()) if len(out) else 0.0
-        total_cmv = float(out["CMV"].sum()) if len(out) else 0.0
-        total_comp = float(out["COMPRAS"].sum()) if len(out) else 0.0
-        total_dev = float(out["DEVOLUÇÕES"].sum()) if len(out) else 0.0
-        total_comp_liq = total_comp - total_dev
-
-        total_mkp_vc = _safe_div(total_fat, total_cmv)
-        total_mkp_cv = _safe_div(total_fat, total_comp_liq)
-        total_dif = total_cmv - total_comp_liq
-        total_ind = None
-        if (total_mkp_vc is not None) and (total_mkp_cv is not None):
-            total_ind = total_mkp_cv - total_mkp_vc
-
-        total_row = pd.DataFrame([{
-            "LOJA": "TOTAL",
-            "FATURAMENTO": total_fat,
-            "CMV": total_cmv,
-            "MKP VENDAS X CUSTO": total_mkp_vc,
-            "COMPRAS": total_comp,
-            "DEVOLUÇÕES": total_dev,
-            "COMPRAS LÍQ": total_comp_liq,
-            "MKP COMPRAS X VENDAS": total_mkp_cv,
-            "DIF COMPRAS X CMV": total_dif,
-            "INDICADOR DE COMPRAS": total_ind,
-        }])
-
-        out = pd.concat([out, total_row], ignore_index=True)
-
-        # Reordena colunas
-        cols = [
-            "LOJA",
-            "FATURAMENTO",
-            "CMV",
-            "MKP VENDAS X CUSTO",
-            "COMPRAS",
-            "DEVOLUÇÕES",
-            "COMPRAS LÍQ",
-            "MKP COMPRAS X VENDAS",
-            "DIF COMPRAS X CMV",
-            "INDICADOR DE COMPRAS",
-        ]
-        out = out[[c for c in cols if c in out.columns]]
-        return out
-
-
-    @st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False, max_entries=3)
-    def _mov_compras_resumo_mensal():
-        """Agrega movimentos uma vez por loja e dia, em vez de copiar a base em cada filtro."""
-        compras, devol = carregar_movimentacoes_compras()
-        def resumir(d):
-            if d.empty:
-                return pd.DataFrame(columns=["LOJA_N", "DATA", "TOT_DOC_NUM"])
-            d = d.loc[d["DATA"].notna(), ["LOJA_N", "DATA", "TOT_DOC_NUM"]]
-            return d.groupby(["LOJA_N", "DATA"], observed=True, as_index=False)["TOT_DOC_NUM"].sum()
-        return resumir(compras), resumir(devol)
-
-    def _render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None):
-        with st.expander("Indicador de Compras | Consulta por loja", expanded=False):
-            st.caption("Selecione uma loja para consultar os indicadores consolidados conforme os filtros laterais.")
-            lojas = sorted(set(str(x) for x in (lojas_sel_aplicadas or [])))
-            if not lojas:
-                st.info("Selecione ao menos uma loja no filtro lateral.")
-                return
-            loja = st.selectbox("Loja para detalhamento", ["TOTAL (lojas filtradas)"] + lojas,
-                                key="indicador_compras_loja_drill")
-            if not st.button("Consultar indicador", type="primary", key="consultar_indicador_compras"):
-                st.info("Clique em Consultar indicador para processar somente a loja selecionada.")
-                return
-            lojas_ativas = lojas if loja == "TOTAL (lojas filtradas)" else [loja]
-            # Projeta apenas as colunas indispensáveis, evitando duplicar a base inteira.
-            base = df_f.loc[df_f["LOJA_N"].astype(str).isin(lojas_ativas),
-                            ["LOJA_N", "FAT_LINHA", "CUSTO_T_NUM"]]
-            compras, devol = _mov_compras_resumo_mensal()
-            tbl = _calc_indicador_compras_por_loja(base, compras, devol,
-                                                    lojas_ativas, data_ini, data_fim, mes_nums_sel)
-            if loja != "TOTAL (lojas filtradas)":
-                tbl = tbl[tbl["LOJA"].astype(str) != "TOTAL"]
-            if tbl.empty:
-                st.info("Sem dados para a seleção.")
-                return
-            formatacoes = {
-                c: (lambda v: "R$ " + format_brl(v))
-                for c in ["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES", "COMPRAS LÍQ"]
-            }
-            formatacoes.update({c: _fmt_num for c in ["DIF COMPRAS X CMV", "MKP VENDAS X CUSTO",
-                                                       "MKP COMPRAS X VENDAS", "INDICADOR DE COMPRAS"]})
-            sty = tbl.style.format(formatacoes).pipe(
-                lambda x: styler_map_compat(x, _indicador_style, subset=["INDICADOR DE COMPRAS"]))
-            st.dataframe(sty, use_container_width=True, hide_index=True, height=min(520, 90 + 38 * len(tbl)))
-
-    _render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
+    st.markdown("### Indicadores de Compras")
+    st.caption("Consulta mensal consolidada diretamente das planilhas, independente dos filtros laterais de vendas.")
+    base_compras = _compras_mensal_resumo()
+    if base_compras.empty:
+        st.warning("Não foram encontrados dados de compras e vendas.")
+    else:
+        anos = sorted(base_compras["ANO"].dropna().astype(int).unique().tolist(), reverse=True)
+        ano_compras = st.selectbox("Ano de análise", anos, key="matriz_compras_ano")
+        mensal = base_compras.loc[base_compras["ANO"].eq(ano_compras)].copy()
+        meses_col = {1:"JAN", 2:"FEV", 3:"MAR", 4:"ABR", 5:"MAI", 6:"JUN", 7:"JUL", 8:"AGO", 9:"SET", 10:"OUT", 11:"NOV", 12:"DEZ"}
+        metricas_soma = ["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES"]
+        def calcular_indicadores(dados):
+            dados = dados.copy()
+            dados["COMPRAS LÍQ"] = dados["COMPRAS"] - dados["DEVOLUÇÕES"]
+            dados["DIF COMPRAS X CMV"] = dados["CMV"] - dados["COMPRAS LÍQ"]
+            dados["MKP VENDAS X CUSTO"] = dados["FATURAMENTO"].div(dados["CMV"].replace(0, float("nan")))
+            dados["MKP COMPRAS X VENDAS"] = dados["FATURAMENTO"].div(dados["COMPRAS LÍQ"].replace(0, float("nan")))
+            dados["INDICADOR DE COMPRAS"] = dados["MKP COMPRAS X VENDAS"] - dados["MKP VENDAS X CUSTO"]
+            return dados
+        mensal = calcular_indicadores(mensal)
+        indicadores = ["FATURAMENTO", "CMV", "MKP VENDAS X CUSTO", "COMPRAS", "DEVOLUÇÕES", "COMPRAS LÍQ", "MKP COMPRAS X VENDAS", "DIF COMPRAS X CMV", "INDICADOR DE COMPRAS"]
+        razoes = {"MKP VENDAS X CUSTO", "MKP COMPRAS X VENDAS", "INDICADOR DE COMPRAS"}
+        def formatar_matriz(tabela, coluna_rotulo):
+            for col in tabela.columns:
+                if col == coluna_rotulo:
+                    continue
+                tabela[col] = tabela.apply(lambda r: "—" if pd.isna(r[col]) else (format_decimal_pt(r[col], 3) if (r[coluna_rotulo] in razoes or col == "INDICADOR DE COMPRAS" and coluna_rotulo == "LOJA") else "R$ " + format_brl(r[col])), axis=1)
+            return tabela
+        visao_mensal, visao_lojas = st.tabs(["Indicadores por mês", "Resumo por loja"])
+        with visao_mensal:
+            opcoes = ["TOTAL (todas as lojas)"] + sorted(mensal["LOJA_N"].unique().tolist())
+            loja_escolhida = st.selectbox("Selecione a loja", opcoes, key="matriz_compras_loja")
+            if loja_escolhida == "TOTAL (todas as lojas)":
+                selecionada = mensal.groupby("MES", as_index=False)[metricas_soma].sum()
+                selecionada = calcular_indicadores(selecionada)
+            else:
+                selecionada = mensal.loc[mensal["LOJA_N"].eq(loja_escolhida)]
+            linhas = []
+            for indicador in indicadores:
+                valores = selecionada.set_index("MES")[indicador].reindex(range(1,13))
+                linha = {"INDICADOR": indicador}
+                for mes, nome in meses_col.items():
+                    valor = valores.loc[mes]
+                    linha[nome] = "—" if pd.isna(valor) else (format_decimal_pt(valor, 3) if indicador in razoes or indicador == "DIF COMPRAS X CMV" else "R$ " + format_brl(valor))
+                linhas.append(linha)
+            st.dataframe(pd.DataFrame(linhas), use_container_width=True, hide_index=True, height=390)
+        with visao_lojas:
+            st.caption("Consolidado anual por loja. Índices recalculados sobre os valores totais, não somados.")
+            lojas_ano = mensal.groupby("LOJA_N", as_index=False, observed=True)[metricas_soma].sum()
+            lojas_ano = calcular_indicadores(lojas_ano)
+            total = pd.DataFrame([{"LOJA_N":"TOTAL", **{c: lojas_ano[c].sum() for c in metricas_soma}}])
+            total = calcular_indicadores(total)
+            resumo = pd.concat([lojas_ano, total], ignore_index=True).rename(columns={"LOJA_N":"LOJA"})
+            colunas = ["LOJA", "FATURAMENTO", "CMV", "COMPRAS LÍQ", "MKP VENDAS X CUSTO", "MKP COMPRAS X VENDAS", "DIF COMPRAS X CMV", "INDICADOR DE COMPRAS"]
+            resumo = resumo[colunas]
+            for col in colunas[1:]:
+                resumo[col] = resumo[col].map(lambda x: "—" if pd.isna(x) else (format_decimal_pt(x, 3) if col in razoes or col == "DIF COMPRAS X CMV" else "R$ " + format_brl(x)))
+            st.dataframe(resumo, use_container_width=True, hide_index=True, height=min(580, 80+36*len(resumo)))
+        st.caption("Compras líquidas = compras − devoluções. Indicador = markup vendas/compras − markup vendas/custo. Valores apurados a partir das bases carregadas.")
