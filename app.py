@@ -3195,7 +3195,7 @@ with aba_vendas:
         st.subheader("Faturamento por Loja")
 
         vendas_loja = (
-            df_f.groupby("LOJA_N", dropna=False)["FAT_LINHA"]
+            df_f.groupby("LOJA_N", dropna=False, observed=True)["FAT_LINHA"]
             .sum()
             .reset_index()
             .sort_values("FAT_LINHA", ascending=False)
@@ -4129,7 +4129,9 @@ with aba_compras:
     st.markdown("#### Compras, CMV e auditoria dos dados")
 
     with st.expander("Ver base filtrada (conferência)"):
-        st.dataframe(df_f, use_container_width=True, height=520)
+        st.caption("Prévia limitada a 300 registros para preservar memória e conexão.")
+        if st.button("Carregar prévia da base", key="compras_previa_btn"):
+            st.dataframe(df_f.head(300), use_container_width=True, height=420)
 
     # ============================================================
     # Indicador de Compras (Base + COMPRAS + DEVOLUÇÕES) - DRILL
@@ -4182,7 +4184,7 @@ with aba_compras:
             base = pd.DataFrame({"LOJA": [], "FATURAMENTO": [], "CMV": []})
         else:
             base = (
-                df_f.groupby("LOJA_N", dropna=False)
+                df_f.groupby("LOJA_N", dropna=False, observed=True)
                 .agg(FATURAMENTO=("FAT_LINHA", "sum"), CMV=("CUSTO_T_NUM", "sum"))
                 .reset_index()
                 .rename(columns={"LOJA_N": "LOJA"})
@@ -4193,7 +4195,7 @@ with aba_compras:
             if dfm is None or dfm.empty:
                 return pd.DataFrame(columns=["LOJA_N", "TOT_DOC_NUM", "DATA"])
 
-            out = dfm.copy()
+            out = dfm
             if lojas_sel_aplicadas:
                 out = out[out["LOJA_N"].isin(lojas_sel_aplicadas)]
 
@@ -4208,11 +4210,11 @@ with aba_compras:
         dev_f = _aplicar_recorte_mov(df_devol)
 
         comp_by = (
-            comp_f.groupby("LOJA_N", dropna=False)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "COMPRAS"})
+            comp_f.groupby("LOJA_N", dropna=False, observed=True)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "COMPRAS"})
             if not comp_f.empty else pd.DataFrame({"LOJA": [], "COMPRAS": []})
         )
         dev_by = (
-            dev_f.groupby("LOJA_N", dropna=False)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "DEVOLUÇÕES"})
+            dev_f.groupby("LOJA_N", dropna=False, observed=True)["TOT_DOC_NUM"].sum().reset_index().rename(columns={"LOJA_N": "LOJA", "TOT_DOC_NUM": "DEVOLUÇÕES"})
             if not dev_f.empty else pd.DataFrame({"LOJA": [], "DEVOLUÇÕES": []})
         )
 
@@ -4225,8 +4227,8 @@ with aba_compras:
                 out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
 
         out["COMPRAS LÍQ"] = out["COMPRAS"] - out["DEVOLUÇÕES"]
-        out["MKP VENDAS X CUSTO"] = out.apply(lambda r: _safe_div(r["FATURAMENTO"], r["CMV"]), axis=1)
-        out["MKP COMPRAS X VENDAS"] = out.apply(lambda r: _safe_div(r["FATURAMENTO"], r["COMPRAS LÍQ"]), axis=1)
+        out["MKP VENDAS X CUSTO"] = out["FATURAMENTO"].div(out["CMV"].replace(0, float("nan")))
+        out["MKP COMPRAS X VENDAS"] = out["FATURAMENTO"].div(out["COMPRAS LÍQ"].replace(0, float("nan")))
         out["DIF COMPRAS X CMV"] = out["CMV"] - out["COMPRAS LÍQ"]
         out["INDICADOR DE COMPRAS"] = out["MKP COMPRAS X VENDAS"] - out["MKP VENDAS X CUSTO"]
 
@@ -4279,39 +4281,49 @@ with aba_compras:
         return out
 
 
-    def _render_indicador_compras_drill(df_f: pd.DataFrame, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None):
-        # Drill (expander) + computação sob demanda para não pesar a abertura do dashboard
-        with st.expander("Abrir Indicador de Compras", expanded=False):
-            st.caption("Tabela por loja (com TOTAL ao final), usando o mesmo recorte de lojas e período do dashboard.")
-            show_tbl = st.checkbox("Calcular/mostrar tabela", value=False, key="show_indicador_compras_tbl")
-            if not show_tbl:
-                st.info("Marque a opção acima para calcular e exibir a tabela. (Isso deixa o carregamento inicial mais leve.)")
+    @st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner=False, max_entries=3)
+    def _mov_compras_resumo_mensal():
+        """Agrega movimentos uma vez por loja e dia, em vez de copiar a base em cada filtro."""
+        compras, devol = carregar_movimentacoes_compras()
+        def resumir(d):
+            if d.empty:
+                return pd.DataFrame(columns=["LOJA_N", "DATA", "TOT_DOC_NUM"])
+            d = d.loc[d["DATA"].notna(), ["LOJA_N", "DATA", "TOT_DOC_NUM"]]
+            return d.groupby(["LOJA_N", "DATA"], observed=True, as_index=False)["TOT_DOC_NUM"].sum()
+        return resumir(compras), resumir(devol)
+
+    def _render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel=None):
+        with st.expander("Indicador de Compras | Consulta por loja", expanded=False):
+            st.caption("Selecione uma loja para consultar os indicadores consolidados conforme os filtros laterais.")
+            lojas = sorted(set(str(x) for x in (lojas_sel_aplicadas or [])))
+            if not lojas:
+                st.info("Selecione ao menos uma loja no filtro lateral.")
                 return
+            loja = st.selectbox("Loja para detalhamento", ["TOTAL (lojas filtradas)"] + lojas,
+                                key="indicador_compras_loja_drill")
+            if not st.button("Consultar indicador", type="primary", key="consultar_indicador_compras"):
+                st.info("Clique em Consultar indicador para processar somente a loja selecionada.")
+                return
+            lojas_ativas = lojas if loja == "TOTAL (lojas filtradas)" else [loja]
+            # Projeta apenas as colunas indispensáveis, evitando duplicar a base inteira.
+            base = df_f.loc[df_f["LOJA_N"].astype(str).isin(lojas_ativas),
+                            ["LOJA_N", "FAT_LINHA", "CUSTO_T_NUM"]]
+            compras, devol = _mov_compras_resumo_mensal()
+            tbl = _calc_indicador_compras_por_loja(base, compras, devol,
+                                                    lojas_ativas, data_ini, data_fim, mes_nums_sel)
+            if loja != "TOTAL (lojas filtradas)":
+                tbl = tbl[tbl["LOJA"].astype(str) != "TOTAL"]
+            if tbl.empty:
+                st.info("Sem dados para a seleção.")
+                return
+            formatacoes = {
+                c: (lambda v: "R$ " + format_brl(v))
+                for c in ["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES", "COMPRAS LÍQ"]
+            }
+            formatacoes.update({c: _fmt_num for c in ["DIF COMPRAS X CMV", "MKP VENDAS X CUSTO",
+                                                       "MKP COMPRAS X VENDAS", "INDICADOR DE COMPRAS"]})
+            sty = tbl.style.format(formatacoes).pipe(
+                lambda x: styler_map_compat(x, _indicador_style, subset=["INDICADOR DE COMPRAS"]))
+            st.dataframe(sty, use_container_width=True, hide_index=True, height=min(520, 90 + 38 * len(tbl)))
 
-            df_compras, df_devol = carregar_movimentacoes_compras()
-            tbl = _calc_indicador_compras_por_loja(df_f, df_compras, df_devol, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
-
-            sty = (
-                tbl.style
-                .format(
-                    {
-                        "FATURAMENTO": lambda v: "R$ " + format_brl(v),
-                        "CMV": lambda v: "R$ " + format_brl(v),
-                        "COMPRAS": lambda v: "R$ " + format_brl(v),
-                        "DEVOLUÇÕES": lambda v: "R$ " + format_brl(v),
-                        "COMPRAS LÍQ": lambda v: "R$ " + format_brl(v),
-                        # DIF é número normal (sem R$)
-                        "DIF COMPRAS X CMV": _fmt_num,
-                        "MKP VENDAS X CUSTO": _fmt_num,
-                        "MKP COMPRAS X VENDAS": _fmt_num,
-                        "INDICADOR DE COMPRAS": _fmt_num,
-                    }
-                )
-                .pipe(lambda s: styler_map_compat(s, _indicador_style, subset=["INDICADOR DE COMPRAS"]))
-            )
-
-            st.dataframe(sty, use_container_width=True, hide_index=True, height=520)
-
-
-    # Render no final do dashboard
     _render_indicador_compras_drill(df_f, lojas_sel_aplicadas, data_ini, data_fim, mes_nums_sel)
