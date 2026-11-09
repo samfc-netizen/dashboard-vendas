@@ -4182,11 +4182,26 @@ with aba_compras:
         mensal = calcular_indicadores(mensal)
         indicadores = ["FATURAMENTO", "CMV", "MKP VENDAS X CUSTO", "COMPRAS", "DEVOLUÇÕES", "COMPRAS LÍQ", "MKP COMPRAS X VENDAS", "DIF COMPRAS X CMV", "INDICADOR DE COMPRAS"]
         razoes = {"MKP VENDAS X CUSTO", "MKP COMPRAS X VENDAS", "INDICADOR DE COMPRAS"}
+        def estilo_indicador_compras(valor):
+            """Faixas preservadas do indicador original, aplicadas ao valor sem arredondamento."""
+            if pd.isna(valor):
+                return ""
+            x = float(valor)
+            if x > 0:
+                return "background-color: #D9E8FF; color: #0B3D91; font-weight: 700;"
+            if -0.09 <= x <= -0.01:
+                return "background-color: #DFF5E1; color: #1B5E20; font-weight: 700;"
+            if -0.15 <= x <= -0.10:
+                return "background-color: #FFF4CC; color: #7A5A00; font-weight: 700;"
+            if x < -0.15:
+                return "background-color: #FFD6D6; color: #8A1C1C; font-weight: 700;"
+            return ""
+
         def formatar_matriz(tabela, coluna_rotulo):
             for col in tabela.columns:
                 if col == coluna_rotulo:
                     continue
-                tabela[col] = tabela.apply(lambda r: "—" if pd.isna(r[col]) else (format_decimal_pt(r[col], 3) if (r[coluna_rotulo] in razoes or col == "INDICADOR DE COMPRAS" and coluna_rotulo == "LOJA") else "R$ " + format_brl(r[col])), axis=1)
+                tabela[col] = tabela.apply(lambda r: "—" if pd.isna(r[col]) else (format_decimal_pt(r[col], 2) if (r[coluna_rotulo] in razoes or col == "INDICADOR DE COMPRAS" and coluna_rotulo == "LOJA") else "R$ " + format_brl(r[col])), axis=1)
             return tabela
         visao_mensal, visao_lojas = st.tabs(["Indicadores por mês", "Resumo por loja"])
         with visao_mensal:
@@ -4198,14 +4213,21 @@ with aba_compras:
             else:
                 selecionada = mensal.loc[mensal["LOJA_N"].eq(loja_escolhida)]
             linhas = []
+            estilos_mensais = []
             for indicador in indicadores:
                 valores = selecionada.set_index("MES")[indicador].reindex(range(1,13))
                 linha = {"INDICADOR": indicador}
                 for mes, nome in meses_col.items():
                     valor = valores.loc[mes]
-                    linha[nome] = "—" if pd.isna(valor) else (format_decimal_pt(valor, 3) if indicador in razoes or indicador == "DIF COMPRAS X CMV" else "R$ " + format_brl(valor))
+                    linha[nome] = "—" if pd.isna(valor) else (format_decimal_pt(valor, 2) if indicador in razoes or indicador == "DIF COMPRAS X CMV" else "R$ " + format_brl(valor))
                 linhas.append(linha)
-            st.dataframe(pd.DataFrame(linhas), use_container_width=True, hide_index=True, height=390)
+                if indicador == "INDICADOR DE COMPRAS":
+                    estilos_mensais = [estilo_indicador_compras(valores.loc[m]) for m in range(1, 13)]
+            matriz_exibicao = pd.DataFrame(linhas)
+            def _cores_mensais(row):
+                return ([""] + estilos_mensais) if row["INDICADOR"] == "INDICADOR DE COMPRAS" else [""] * len(row)
+            st.dataframe(matriz_exibicao.style.apply(_cores_mensais, axis=1),
+                         use_container_width=True, hide_index=True, height=390)
         with visao_lojas:
             st.caption("Consolidado anual por loja. Índices recalculados sobre os valores totais, não somados.")
             lojas_ano = mensal.groupby("LOJA_N", as_index=False, observed=True)[metricas_soma].sum()
@@ -4215,7 +4237,14 @@ with aba_compras:
             resumo = pd.concat([lojas_ano, total], ignore_index=True).rename(columns={"LOJA_N":"LOJA"})
             colunas = ["LOJA", "FATURAMENTO", "CMV", "COMPRAS LÍQ", "MKP VENDAS X CUSTO", "MKP COMPRAS X VENDAS", "DIF COMPRAS X CMV", "INDICADOR DE COMPRAS"]
             resumo = resumo[colunas]
+            cores_resumo = resumo["INDICADOR DE COMPRAS"].map(estilo_indicador_compras).tolist()
             for col in colunas[1:]:
-                resumo[col] = resumo[col].map(lambda x: "—" if pd.isna(x) else (format_decimal_pt(x, 3) if col in razoes or col == "DIF COMPRAS X CMV" else "R$ " + format_brl(x)))
-            st.dataframe(resumo, use_container_width=True, hide_index=True, height=min(580, 80+36*len(resumo)))
+                resumo[col] = resumo[col].map(lambda x: "—" if pd.isna(x) else (format_decimal_pt(x, 2) if col in razoes or col == "DIF COMPRAS X CMV" else "R$ " + format_brl(x)))
+            def _cores_resumo(coluna):
+                return cores_resumo if coluna.name == "INDICADOR DE COMPRAS" else [""] * len(coluna)
+            st.dataframe(resumo.style.apply(_cores_resumo, axis=0),
+                         use_container_width=True, hide_index=True, height=min(580, 80+36*len(resumo)))
+        st.caption("Cores do indicador (regra original): azul acima de 0; verde de −0,09 a −0,01; "
+                   "amarelo de −0,15 a −0,10; vermelho abaixo de −0,15. "
+                   "Valores intermediários e zero sem destaque.")
         st.caption("Compras líquidas = compras − devoluções. Indicador = markup vendas/compras − markup vendas/custo. Valores apurados a partir das bases carregadas.")
