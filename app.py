@@ -2385,9 +2385,109 @@ def render_super_setembro(df_base: pd.DataFrame | None = None):
     st.caption(f"Período da campanha: {cfg['inicio'].strftime('%d/%m/%Y')} a {cfg['fim'].strftime('%d/%m/%Y')} | Dados considerados até {data_referencia.strftime('%d/%m/%Y')}")
 
 
+
+# =========================================================
+# PAINEL MENSAL DE COMPRAS — página independente e leve
+# =========================================================
+@st.cache_data(ttl=CACHE_TTL_SEGUNDOS, show_spinner="Consolidando compras por mês...", max_entries=2)
+def _compras_mensal_resumo():
+    """Um registro por loja/ano/mês; nenhum dataframe detalhado é enviado à interface."""
+    vendas = carregar_dados()
+    vendas = vendas.loc[vendas["DATA"].notna(), ["LOJA_N", "DATA", "FAT_LINHA", "CUSTO_T_NUM"]]
+    vendas = vendas.assign(ANO=vendas["DATA"].dt.year.astype("int16"),
+                           MES=vendas["DATA"].dt.month.astype("int8"))
+    v = (vendas.groupby(["LOJA_N", "ANO", "MES"], observed=True, as_index=False)
+         .agg(FATURAMENTO=("FAT_LINHA", "sum"), CMV=("CUSTO_T_NUM", "sum")))
+    del vendas
+    compras, devolucoes = carregar_movimentacoes_compras()
+    def _resumir_mov(mov, coluna):
+        if mov.empty:
+            return pd.DataFrame(columns=["LOJA_N", "ANO", "MES", coluna])
+        mov = mov.loc[mov["DATA"].notna(), ["LOJA_N", "DATA", "TOT_DOC_NUM"]]
+        mov = mov.assign(ANO=mov["DATA"].dt.year.astype("int16"),
+                         MES=mov["DATA"].dt.month.astype("int8"))
+        return (mov.groupby(["LOJA_N", "ANO", "MES"], observed=True, as_index=False)
+                ["TOT_DOC_NUM"].sum().rename(columns={"TOT_DOC_NUM": coluna}))
+    c = _resumir_mov(compras, "COMPRAS")
+    d = _resumir_mov(devolucoes, "DEVOLUÇÕES")
+    del compras, devolucoes
+    base = v.merge(c, on=["LOJA_N", "ANO", "MES"], how="outer").merge(
+        d, on=["LOJA_N", "ANO", "MES"], how="outer")
+    for coluna in ["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES"]:
+        base[coluna] = pd.to_numeric(base[coluna], errors="coerce").fillna(0.0).astype("float64")
+    base["LOJA_N"] = base["LOJA_N"].astype(str)
+    return base
+
+def _pagina_compras_mensal():
+    st.title("Indicadores de Compras | Matriz mensal")
+    st.caption("Todas as lojas e meses em uma única consulta. Não utiliza os filtros do Dashboard.")
+    base = _compras_mensal_resumo()
+    if base.empty:
+        st.warning("Não foram encontrados dados nas planilhas.")
+        return
+    anos = sorted(base["ANO"].dropna().astype(int).unique().tolist(), reverse=True)
+    ano = st.selectbox("Ano", anos, key="compras_matriz_ano")
+    base = base.loc[base["ANO"] == ano].copy()
+    base["COMPRAS LÍQ"] = base["COMPRAS"] - base["DEVOLUÇÕES"]
+    base["DIF COMPRAS X CMV"] = base["CMV"] - base["COMPRAS LÍQ"]
+    base["MKP VENDAS X CUSTO"] = base["FATURAMENTO"].div(base["CMV"].replace(0, float("nan")))
+    base["MKP COMPRAS X VENDAS"] = base["FATURAMENTO"].div(base["COMPRAS LÍQ"].replace(0, float("nan")))
+    base["INDICADOR DE COMPRAS"] = base["MKP COMPRAS X VENDAS"] - base["MKP VENDAS X CUSTO"]
+    metricas = [
+        "INDICADOR DE COMPRAS", "FATURAMENTO", "CMV", "MKP VENDAS X CUSTO",
+        "COMPRAS", "DEVOLUÇÕES", "COMPRAS LÍQ", "MKP COMPRAS X VENDAS",
+        "DIF COMPRAS X CMV",
+    ]
+    nomes = {1:"JAN", 2:"FEV", 3:"MAR", 4:"ABR", 5:"MAI", 6:"JUN",
+             7:"JUL", 8:"AGO", 9:"SET", 10:"OUT", 11:"NOV", 12:"DEZ"}
+    st.markdown("**Visão consolidada — lojas nas linhas e meses nas colunas**")
+    tabs = st.tabs(["Indicador", "Faturamento", "CMV", "Markup vendas/custo",
+                    "Compras", "Devoluções", "Compras líquidas",
+                    "Markup vendas/compras", "Diferença compras/CMV"])
+    # Apenas ~12 x número de lojas por tabela; sem Styled DataFrames volumosos.
+    for tab, metrica in zip(tabs, metricas):
+        with tab:
+            matriz = base.pivot_table(index="LOJA_N", columns="MES",
+                                      values=metrica, aggfunc="first")
+            matriz = matriz.reindex(columns=range(1,13))
+            # TOTAL: razões são recalculadas sobre os somatórios, nunca somadas.
+            totais = base.groupby("MES")[["FATURAMENTO", "CMV", "COMPRAS", "DEVOLUÇÕES"]].sum()
+            liq = totais["COMPRAS"] - totais["DEVOLUÇÕES"]
+            total_metricas = {
+                "FATURAMENTO": totais["FATURAMENTO"],
+                "CMV": totais["CMV"],
+                "COMPRAS": totais["COMPRAS"],
+                "DEVOLUÇÕES": totais["DEVOLUÇÕES"],
+                "COMPRAS LÍQ": liq,
+                "DIF COMPRAS X CMV": totais["CMV"] - liq,
+                "MKP VENDAS X CUSTO": totais["FATURAMENTO"].div(totais["CMV"].replace(0, float("nan"))),
+                "MKP COMPRAS X VENDAS": totais["FATURAMENTO"].div(liq.replace(0, float("nan"))),
+            }
+            total_metricas["INDICADOR DE COMPRAS"] = (
+                total_metricas["MKP COMPRAS X VENDAS"] - total_metricas["MKP VENDAS X CUSTO"])
+            matriz.loc["TOTAL"] = total_metricas[metrica].reindex(range(1,13))
+            matriz = matriz.rename(columns=nomes).reset_index().rename(columns={"LOJA_N":"LOJA"})
+            razao = metrica.startswith("MKP") or metrica == "INDICADOR DE COMPRAS"
+            colunas_meses = list(nomes.values())
+            exibicao = matriz.copy()
+            for col in colunas_meses:
+                exibicao[col] = exibicao[col].map(
+                    lambda x: ("—" if pd.isna(x) else
+                               (format_decimal_pt(x, 3) if razao else "R$ " + format_brl(x))))
+            st.dataframe(exibicao, use_container_width=True, hide_index=True,
+                         height=min(560, 80 + 36*len(exibicao)))
+    st.caption("Cálculos: compras líquidas = compras − devoluções; indicador = "
+               "(faturamento ÷ compras líquidas) − (faturamento ÷ CMV). "
+               "O TOTAL recalcula as razões a partir dos valores consolidados.")
+
 # =========================
 # Carrega e prepara base
 # =========================
+pagina_app = st.sidebar.radio("Página", ["Indicadores de Compras", "Dashboard", "Campanhas", "Relatórios"], index=0)
+if pagina_app == "Indicadores de Compras":
+    _pagina_compras_mensal()
+    st.stop()
+
 df = carregar_dados()
 df = df.loc[df["FAT_LINHA"].notna()]
 
@@ -2398,7 +2498,6 @@ VAL_COL = "VR_TOTAL_NUM" if use_vr_total else "FAT_LINHA"
 # =========================
 # Navegação
 # =========================
-pagina_app = st.sidebar.radio("Página", ["Dashboard", "Campanhas", "Relatórios"], index=0)
 if pagina_app == "Campanhas":
     render_super_setembro()
     st.stop()
