@@ -2471,13 +2471,13 @@ def calcular_black_friday(df_vendas, df_metas):
     )
     for posicao, indice in enumerate(validos.index, start=1):
         resultado.loc[indice, "Posição premiação"] = posicao
-    resultado["Posição faturamento BF"] = pd.NA
+    resultado["Posição faturamento Black Friday"] = pd.NA
     por_bf = resultado.sort_values(
         ["Faturamento Black Friday", "Saldo mensal (R$)", "LOJA_KEY"],
         ascending=[False, False, True], kind="stable", na_position="last"
     )
     for posicao, indice in enumerate(por_bf.index, start=1):
-        resultado.loc[indice, "Posição faturamento BF"] = posicao
+        resultado.loc[indice, "Posição faturamento Black Friday"] = posicao
     return resultado
 
 
@@ -2491,25 +2491,28 @@ def render_black_friday(df_vendas):
     resultado = calcular_black_friday(df_vendas, metas_ref)
     if resultado["Meta mensal"].isna().any():
         st.error("Há lojas sem meta mensal de novembro. Confira a aba META DAUTO TINTAS de METAS.xlsx. Essas lojas não recebem posição de premiação.")
-    moeda = lambda n: "R$ " + format_brl(n) if pd.notna(n) else "—"
+    moeda = lambda n: "R$" + format_brl(n) if pd.notna(n) else "—"
     a,b,c,d = st.columns(4)
     a.metric("Meta total Black Friday", moeda(resultado["Meta Black Friday"].sum()))
     b.metric("Faturamento Black Friday", moeda(resultado["Faturamento Black Friday"].sum()))
     c.metric("Atingimento Black Friday", format_decimal_pt(100 * resultado["Faturamento Black Friday"].sum() / resultado["Meta Black Friday"].sum(), 1) + "%")
     d.metric("Lojas com meta mensal atingida", f'{int(resultado["Meta mensal atingida"].sum())} / {len(resultado)}')
     st.info("Critério da posição parcial para premiação: maior saldo em R$ sobre a meta mensal (faturamento mensal − meta mensal). Lojas abaixo da meta ficam ordenadas por quanto falta, em R$; lojas acima ficam à frente pelo maior excedente. Empate: maior faturamento na Black Friday. A meta da Black Friday é acompanhada separadamente.")
-    tab1, tab2, tab3 = st.tabs(["Ranking de premiação", "Ranking de faturamento BF", "Evolução diária"])
+    tab1, tab2, tab3 = st.tabs(["Ranking de premiação", "Ranking de faturamento Black Friday", "Evolução diária"])
     with tab1:
-        colunas = ["Posição premiação", "Loja", "Faturamento mensal", "Meta mensal", "Ating. mensal (%)", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday", "Posição faturamento BF", "Situação"]
+        colunas = ["Posição premiação", "Loja", "Faturamento mensal", "Meta mensal", "Ating. mensal (%)", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday", "Posição faturamento Black Friday", "Situação"]
         quadro = resultado.sort_values("Posição premiação", na_position="last")[colunas].copy()
+        for coluna_moeda in ["Faturamento mensal", "Meta mensal", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday"]:
+            quadro[coluna_moeda] = quadro[coluna_moeda].map(moeda)
         st.dataframe(quadro, hide_index=True, use_container_width=True, column_config={
-            **{x: st.column_config.NumberColumn(x, format="R$ %.2f") for x in ["Faturamento mensal", "Meta mensal", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday"]},
             "Ating. mensal (%)": st.column_config.ProgressColumn("Ating. mensal (%)", min_value=0, max_value=100, format="%.1f%%"),
         })
     with tab2:
-        colunas = ["Posição faturamento BF", "Loja", "Faturamento Black Friday", "Meta Black Friday", "Ating. Black Friday (%)", "Saldo Black Friday (R$)", "Falta meta mensal", "Posição premiação", "Situação"]
-        st.dataframe(resultado.sort_values("Posição faturamento BF")[colunas], hide_index=True, use_container_width=True, column_config={
-            **{x: st.column_config.NumberColumn(x, format="R$ %.2f") for x in ["Faturamento Black Friday", "Meta Black Friday", "Saldo Black Friday (R$)", "Falta meta mensal"]},
+        colunas = ["Posição faturamento Black Friday", "Loja", "Faturamento Black Friday", "Meta Black Friday", "Ating. Black Friday (%)", "Saldo Black Friday (R$)", "Falta meta mensal", "Posição premiação", "Situação"]
+        quadro_faturamento = resultado.sort_values("Posição faturamento Black Friday")[colunas].copy()
+        for coluna_moeda in ["Faturamento Black Friday", "Meta Black Friday", "Saldo Black Friday (R$)", "Falta meta mensal"]:
+            quadro_faturamento[coluna_moeda] = quadro_faturamento[coluna_moeda].map(moeda)
+        st.dataframe(quadro_faturamento, hide_index=True, use_container_width=True, column_config={
             "Ating. Black Friday (%)": st.column_config.ProgressColumn("Ating. Black Friday (%)", min_value=0, max_value=100, format="%.1f%%"),
         })
         fig = px.bar(resultado.sort_values("Faturamento Black Friday", ascending=True), x="Faturamento Black Friday", y="Loja", orientation="h", text="Faturamento Black Friday", title="Faturamento acumulado da Black Friday")
@@ -2526,7 +2529,9 @@ def render_black_friday(df_vendas):
             diario = d.groupby(["Dia", "Loja"], observed=True, as_index=False)["FAT_LINHA"].sum()
             fig = px.bar(diario, x="Dia", y="FAT_LINHA", color="Loja", barmode="group", title="Faturamento diário por loja", labels={"FAT_LINHA": "Faturamento (R$)"})
             bi_plotly_chart(fig, use_container_width=True)
-            st.dataframe(diario.rename(columns={"FAT_LINHA": "Faturamento (R$)"}), hide_index=True, use_container_width=True)
+            diario_exibicao = diario.rename(columns={"FAT_LINHA": "Faturamento (R$)"}).copy()
+            diario_exibicao["Faturamento (R$)"] = diario_exibicao["Faturamento (R$)"].map(moeda)
+            st.dataframe(diario_exibicao, hide_index=True, use_container_width=True)
     st.download_button("Exportar acompanhamento (CSV)", resultado.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), file_name="black_friday_dauto_2026.csv", mime="text/csv")
 
 
