@@ -2418,10 +2418,122 @@ def _compras_mensal_resumo():
     base["LOJA_N"] = base["LOJA_N"].astype(str)
     return base
 
+# =========================================================
+# BLACK FRIDAY 2026 | 23 a 27 de novembro
+# =========================================================
+BLACK_FRIDAY_METAS = {
+    "ADE": 115000.0, "GAMA": 98000.0, "SOFNORTE": 125000.0,
+    "CEILANDIA": 125000.0, "SIA": 125000.0, "AGLINDAS": 50000.0,
+    "GUARA": 120000.0, "LUZIANIA": 200000.0, "UNAI": 63000.0,
+}
+BLACK_FRIDAY_NOMES = {
+    "ADE": "ADE", "GAMA": "GAMA", "SOFNORTE": "SOFNORTE",
+    "CEILANDIA": "CEILÂNDIA", "SIA": "SIA", "AGLINDAS": "ÁGUAS LINDAS",
+    "GUARA": "GUARÁ", "LUZIANIA": "LUZIÂNIA", "UNAI": "UNAÍ",
+}
+
+def calcular_black_friday(df_vendas, df_metas):
+    """Ranking mensal para premiação e ranking de faturamento da BF, sem filtros globais."""
+    dados = df_vendas.loc[df_vendas["DATA"].notna() & df_vendas["LOJA_KEY"].isin(BLACK_FRIDAY_METAS)].copy()
+    datas = pd.to_datetime(dados["DATA"], errors="coerce")
+    mensal = dados.loc[(datas >= pd.Timestamp("2026-11-01")) & (datas < pd.Timestamp("2026-12-01"))]
+    bf = dados.loc[(datas >= pd.Timestamp("2026-11-23")) & (datas < pd.Timestamp("2026-11-28"))]
+    fat_mes = mensal.groupby("LOJA_KEY", observed=True)["FAT_LINHA"].sum().to_dict()
+    fat_bf = bf.groupby("LOJA_KEY", observed=True)["FAT_LINHA"].sum().to_dict()
+    metas = df_metas.loc[df_metas["MES_NUM"] == 11].copy()
+    meta_mes = metas.groupby("LOJA_KEY")["META"].sum(min_count=1).to_dict()
+    linhas = []
+    for loja, meta_bf in BLACK_FRIDAY_METAS.items():
+        mm = meta_mes.get(loja)
+        mm = float(mm) if mm is not None and pd.notna(mm) and float(mm) > 0 else float('nan')
+        fm = float(fat_mes.get(loja, 0.0))
+        fb = float(fat_bf.get(loja, 0.0))
+        saldo = fm - mm if pd.notna(mm) else float('nan')
+        atingiu = bool(pd.notna(saldo) and saldo >= -0.005)
+        linhas.append({
+            "LOJA_KEY": loja, "Loja": BLACK_FRIDAY_NOMES[loja],
+            "Meta mensal": mm, "Faturamento mensal": fm,
+            "Ating. mensal (%)": fm / mm * 100 if pd.notna(mm) else float('nan'),
+            "Falta meta mensal": max(0.0, -saldo) if pd.notna(saldo) else float('nan'),
+            "Saldo mensal (R$)": saldo,
+            "Meta Black Friday": meta_bf, "Faturamento Black Friday": fb,
+            "Ating. Black Friday (%)": fb / meta_bf * 100,
+            "Saldo Black Friday (R$)": fb - meta_bf,
+            "Meta mensal atingida": atingiu,
+            "Situação": "Elegível — meta mensal atingida" if atingiu else ("Aguardando meta mensal" if pd.notna(mm) else "Meta mensal indisponível"),
+        })
+    resultado = pd.DataFrame(linhas)
+    # Sem meta mensal, não atribuir posição de premiação arbitrária.
+    resultado["Posição premiação"] = pd.NA
+    validos = resultado[resultado["Meta mensal"].notna()].sort_values(
+        ["Saldo mensal (R$)", "Faturamento Black Friday", "LOJA_KEY"],
+        ascending=[False, False, True], kind="stable"
+    )
+    for posicao, indice in enumerate(validos.index, start=1):
+        resultado.loc[indice, "Posição premiação"] = posicao
+    resultado["Posição faturamento BF"] = pd.NA
+    por_bf = resultado.sort_values(
+        ["Faturamento Black Friday", "Saldo mensal (R$)", "LOJA_KEY"],
+        ascending=[False, False, True], kind="stable", na_position="last"
+    )
+    for posicao, indice in enumerate(por_bf.index, start=1):
+        resultado.loc[indice, "Posição faturamento BF"] = posicao
+    return resultado
+
+
+def render_black_friday(df_vendas):
+    st.markdown("## BLACK FRIDAY | DAUTO TINTAS")
+    st.caption("23 a 27 de novembro de 2026 · Ranking para premiação condicionado à meta mensal de novembro")
+    metas_ref, _, _ = carregar_referencias_planejamento()
+    if metas_ref is None or metas_ref.empty:
+        metas_ref = montar_df_metas_fixas(list(BLACK_FRIDAY_METAS))
+        st.warning("METAS.xlsx não disponível: utilizando metas mensais fixas do código.")
+    resultado = calcular_black_friday(df_vendas, metas_ref)
+    if resultado["Meta mensal"].isna().any():
+        st.error("Há lojas sem meta mensal de novembro. Confira a aba META DAUTO TINTAS de METAS.xlsx. Essas lojas não recebem posição de premiação.")
+    moeda = lambda n: "R$ " + format_brl(n) if pd.notna(n) else "—"
+    a,b,c,d = st.columns(4)
+    a.metric("Meta total Black Friday", moeda(resultado["Meta Black Friday"].sum()))
+    b.metric("Faturamento Black Friday", moeda(resultado["Faturamento Black Friday"].sum()))
+    c.metric("Atingimento Black Friday", format_decimal_pt(100 * resultado["Faturamento Black Friday"].sum() / resultado["Meta Black Friday"].sum(), 1) + "%")
+    d.metric("Lojas com meta mensal atingida", f'{int(resultado["Meta mensal atingida"].sum())} / {len(resultado)}')
+    st.info("Critério da posição parcial para premiação: maior saldo em R$ sobre a meta mensal (faturamento mensal − meta mensal). Lojas abaixo da meta ficam ordenadas por quanto falta, em R$; lojas acima ficam à frente pelo maior excedente. Empate: maior faturamento na Black Friday. A meta da Black Friday é acompanhada separadamente.")
+    tab1, tab2, tab3 = st.tabs(["Ranking de premiação", "Ranking de faturamento BF", "Evolução diária"])
+    with tab1:
+        colunas = ["Posição premiação", "Loja", "Faturamento mensal", "Meta mensal", "Ating. mensal (%)", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday", "Posição faturamento BF", "Situação"]
+        quadro = resultado.sort_values("Posição premiação", na_position="last")[colunas].copy()
+        st.dataframe(quadro, hide_index=True, use_container_width=True, column_config={
+            **{x: st.column_config.NumberColumn(x, format="R$ %.2f") for x in ["Faturamento mensal", "Meta mensal", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday"]},
+            "Ating. mensal (%)": st.column_config.ProgressColumn("Ating. mensal (%)", min_value=0, max_value=100, format="%.1f%%"),
+        })
+    with tab2:
+        colunas = ["Posição faturamento BF", "Loja", "Faturamento Black Friday", "Meta Black Friday", "Ating. Black Friday (%)", "Saldo Black Friday (R$)", "Falta meta mensal", "Posição premiação", "Situação"]
+        st.dataframe(resultado.sort_values("Posição faturamento BF")[colunas], hide_index=True, use_container_width=True, column_config={
+            **{x: st.column_config.NumberColumn(x, format="R$ %.2f") for x in ["Faturamento Black Friday", "Meta Black Friday", "Saldo Black Friday (R$)", "Falta meta mensal"]},
+            "Ating. Black Friday (%)": st.column_config.ProgressColumn("Ating. Black Friday (%)", min_value=0, max_value=100, format="%.1f%%"),
+        })
+        fig = px.bar(resultado.sort_values("Faturamento Black Friday", ascending=True), x="Faturamento Black Friday", y="Loja", orientation="h", text="Faturamento Black Friday", title="Faturamento acumulado da Black Friday")
+        fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+        bi_plotly_chart(fig, use_container_width=True)
+    with tab3:
+        d = df_vendas.loc[df_vendas["DATA"].notna() & df_vendas["LOJA_KEY"].isin(BLACK_FRIDAY_METAS)].copy()
+        d = d[(d["DATA"] >= pd.Timestamp("2026-11-23")) & (d["DATA"] < pd.Timestamp("2026-11-28"))]
+        if d.empty:
+            st.info("Ainda não há vendas registradas no período de 23 a 27/11/2026.")
+        else:
+            d["Dia"] = pd.to_datetime(d["DATA"]).dt.strftime("%d/%m")
+            d["Loja"] = d["LOJA_KEY"].map(BLACK_FRIDAY_NOMES)
+            diario = d.groupby(["Dia", "Loja"], observed=True, as_index=False)["FAT_LINHA"].sum()
+            fig = px.bar(diario, x="Dia", y="FAT_LINHA", color="Loja", barmode="group", title="Faturamento diário por loja", labels={"FAT_LINHA": "Faturamento (R$)"})
+            bi_plotly_chart(fig, use_container_width=True)
+            st.dataframe(diario.rename(columns={"FAT_LINHA": "Faturamento (R$)"}), hide_index=True, use_container_width=True)
+    st.download_button("Exportar acompanhamento (CSV)", resultado.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), file_name="black_friday_dauto_2026.csv", mime="text/csv")
+
+
 # =========================
 # Carrega e prepara base
 # =========================
-pagina_app = st.sidebar.radio("Página", ["Dashboard", "Campanhas", "Relatórios"], index=0)
+pagina_app = st.sidebar.radio("Página", ["Dashboard", "Black Friday", "Relatórios"], index=0)
 
 df = carregar_dados()
 df = df.loc[df["FAT_LINHA"].notna()]
@@ -2433,8 +2545,8 @@ VAL_COL = "VR_TOTAL_NUM" if use_vr_total else "FAT_LINHA"
 # =========================
 # Navegação
 # =========================
-if pagina_app == "Campanhas":
-    render_super_setembro()
+if pagina_app == "Black Friday":
+    render_black_friday(df)
     st.stop()
 if pagina_app == "Relatórios":
     render_relatorios_whatsapp(df, VAL_COL)
