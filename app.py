@@ -2575,34 +2575,56 @@ def render_black_friday(df_vendas):
     st.info("Ranking: primeiro as lojas com meta mensal atingida, classificadas pelo maior excedente em R$ sobre a meta individual da Black Friday. As demais ficam atrás, pelo menor valor que falta para a meta mensal. Premiação somente para quem atingir ambas as metas.")
 
     def exibir_tabela(tabela, chave, nome_pdf, progresso=None):
+        # Colunas com larguras proporcionais ao conteúdo: posição compacta e situação ampla.
         config = {}
+        for coluna in tabela.columns:
+            if coluna in ("Posição", "Posição premiação", "Posição faturamento Black Friday"):
+                config[coluna] = st.column_config.NumberColumn(coluna, width="small", format="%d")
+            elif coluna == "Loja":
+                config[coluna] = st.column_config.TextColumn("Loja", width="medium")
+            elif coluna == "Situação":
+                config[coluna] = st.column_config.TextColumn("Situação da meta mensal", width="large")
+            elif coluna == "Situação pagamento":
+                config[coluna] = st.column_config.TextColumn("Situação do pagamento", width="large")
+            elif coluna != progresso:
+                config[coluna] = st.column_config.TextColumn(coluna, width="medium")
         if progresso:
-            config[progresso] = st.column_config.ProgressColumn(progresso, min_value=0, max_value=100, format="%.1f%%")
-        # A coluna Situação usa marcação vermelha para metas mensais pendentes.
+            config[progresso] = st.column_config.ProgressColumn(
+                progresso, width="medium", min_value=0, max_value=100, format="%.1f%%"
+            )
         if "Situação" in tabela.columns:
             def cor_situacao(valor):
                 if str(valor).startswith("Falta "):
-                    return "background-color:#fee2e2;color:#991b1b;font-weight:700;border-radius:5px;"
+                    return "background-color:#fee2e2;color:#991b1b;font-weight:700;"
                 if valor == "Meta mensal atingida":
-                    return "background-color:#dcfce7;color:#166534;font-weight:700;border-radius:5px;"
+                    return "background-color:#dcfce7;color:#166534;font-weight:700;"
                 return ""
             estilo = tabela.style.map(cor_situacao, subset=["Situação"]) if hasattr(tabela.style, "map") else tabela.style.applymap(cor_situacao, subset=["Situação"])
-            st.dataframe(estilo, hide_index=True, use_container_width=True, height=510, column_config=config)
+            st.dataframe(estilo, hide_index=True, use_container_width=True,
+                         height=min(430, 45 + len(tabela) * 35), column_config=config,
+                         row_height=35)
         else:
-            st.dataframe(tabela, hide_index=True, use_container_width=True, height=510, column_config=config)
+            st.dataframe(tabela, hide_index=True, use_container_width=True,
+                         height=min(430, 45 + len(tabela) * 35), column_config=config,
+                         row_height=35)
         botao_pdf_black_friday(chave, tabela, nome_pdf, "pdf_bf_" + nome_pdf)
 
     tab1, tab2, tab3, tab4 = st.tabs(["Ranking de premiação", "Ranking de faturamento Black Friday", "Evolução diária", "Pagamento das premiações"])
     with tab1:
-        colunas = ["Posição premiação", "Loja", "Faturamento mensal", "Meta mensal", "Ating. mensal (%)", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday", "Posição faturamento Black Friday", "Situação"]
+        # Visão executiva: elimina colunas redundantes e reserva espaço para a situação completa.
+        colunas = ["Posição premiação", "Loja", "Faturamento mensal", "Meta mensal",
+                   "Ating. mensal (%)", "Faturamento Black Friday", "Saldo Black Friday (R$)", "Situação"]
         quadro = resultado.sort_values("Posição premiação", na_position="last")[colunas].copy()
-        for coluna_moeda in ["Faturamento mensal", "Meta mensal", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday"]:
+        quadro = quadro.rename(columns={"Posição premiação": "Posição",
+                                        "Saldo Black Friday (R$)": "Excedente Black Friday"})
+        for coluna_moeda in ["Faturamento mensal", "Meta mensal", "Faturamento Black Friday", "Excedente Black Friday"]:
             quadro[coluna_moeda] = quadro[coluna_moeda].map(moeda)
         exibir_tabela(quadro, "Ranking de premiação", "black_friday_ranking_premiacao.pdf", "Ating. mensal (%)")
     with tab2:
-        colunas = ["Posição faturamento Black Friday", "Loja", "Faturamento Black Friday", "Meta Black Friday", "Ating. Black Friday (%)", "Saldo Black Friday (R$)", "Falta meta mensal", "Posição premiação", "Situação"]
+        colunas = ["Posição faturamento Black Friday", "Loja", "Faturamento Black Friday", "Meta Black Friday", "Ating. Black Friday (%)", "Saldo Black Friday (R$)", "Situação"]
         quadro_faturamento = resultado.sort_values("Posição faturamento Black Friday")[colunas].copy()
-        for coluna_moeda in ["Faturamento Black Friday", "Meta Black Friday", "Saldo Black Friday (R$)", "Falta meta mensal"]:
+        quadro_faturamento = quadro_faturamento.rename(columns={"Posição faturamento Black Friday": "Posição", "Saldo Black Friday (R$)": "Excedente Black Friday"})
+        for coluna_moeda in ["Faturamento Black Friday", "Meta Black Friday", "Excedente Black Friday"]:
             quadro_faturamento[coluna_moeda] = quadro_faturamento[coluna_moeda].map(moeda)
         exibir_tabela(quadro_faturamento, "Ranking de faturamento Black Friday", "black_friday_ranking_faturamento.pdf", "Ating. Black Friday (%)")
         fig = px.bar(resultado.sort_values("Faturamento Black Friday", ascending=True), x="Faturamento Black Friday", y="Loja", orientation="h", text="Faturamento Black Friday", title="Faturamento acumulado da Black Friday")
