@@ -157,7 +157,7 @@ def aplicar_estilo_visual():
         }
         /* DAUTO BI | identidade visual unificada */
         .stApp {background:#f4f7fc !important; color:#142443;}
-        .block-container {max-width:1680px; padding-top:1.1rem; padding-bottom:3rem;}
+        .block-container {max-width:100% !important; width:100% !important; padding-top:1.1rem; padding-bottom:3rem;}
         h1,h2,h3 {color:#10234a !important; letter-spacing:-.035em; font-weight:760 !important;}
         h3 {font-size:1.28rem !important; margin-top:1.2rem !important;}
         div[data-testid="stMetric"] {border:1px solid #e0e9f5 !important; border-radius:15px !important; box-shadow:0 4px 18px rgba(25,61,110,.045) !important; min-height:100px; padding:16px 18px !important;}
@@ -2543,6 +2543,19 @@ def pdf_black_friday(titulo, tabela, observacao=""):
     return buffer.getvalue()
 
 
+def botao_pdf_black_friday(titulo, tabela, nome_pdf, chave):
+    """Evita interromper o BI caso a dependência de exportação não esteja instalada."""
+    try:
+        conteudo = pdf_black_friday(titulo, tabela)
+    except ModuleNotFoundError as exc:
+        if exc.name == "reportlab":
+            st.warning("Exportação PDF indisponível: adicione `reportlab>=4.0` ao requirements.txt do Streamlit Cloud e reinicie o aplicativo.")
+            return
+        raise
+    st.download_button("Exportar PDF — " + titulo, data=conteudo,
+                       file_name=nome_pdf, mime="application/pdf", key=chave)
+
+
 def render_black_friday(df_vendas):
     st.markdown("## BLACK FRIDAY | DAUTO TINTAS")
     st.caption("23 a 27 de novembro de 2026 · Ranking para premiação condicionado à meta mensal de novembro")
@@ -2574,11 +2587,10 @@ def render_black_friday(df_vendas):
                     return "background-color:#dcfce7;color:#166534;font-weight:700;border-radius:5px;"
                 return ""
             estilo = tabela.style.map(cor_situacao, subset=["Situação"]) if hasattr(tabela.style, "map") else tabela.style.applymap(cor_situacao, subset=["Situação"])
-            st.dataframe(estilo, hide_index=True, use_container_width=True, column_config=config)
+            st.dataframe(estilo, hide_index=True, use_container_width=True, height=510, column_config=config)
         else:
-            st.dataframe(tabela, hide_index=True, use_container_width=True, column_config=config)
-        st.download_button("Exportar PDF — " + chave, data=pdf_black_friday(chave, tabela),
-                           file_name=nome_pdf, mime="application/pdf", key="pdf_bf_" + nome_pdf)
+            st.dataframe(tabela, hide_index=True, use_container_width=True, height=510, column_config=config)
+        botao_pdf_black_friday(chave, tabela, nome_pdf, "pdf_bf_" + nome_pdf)
 
     tab1, tab2, tab3, tab4 = st.tabs(["Ranking de premiação", "Ranking de faturamento Black Friday", "Evolução diária", "Pagamento das premiações"])
     with tab1:
@@ -2610,9 +2622,8 @@ def render_black_friday(df_vendas):
             bi_plotly_chart(fig, use_container_width=True)
             diario_exibicao = diario.rename(columns={"FAT_LINHA": "Faturamento (R$)"}).copy()
             diario_exibicao["Faturamento (R$)"] = diario_exibicao["Faturamento (R$)"].map(moeda)
-            st.dataframe(diario_exibicao, hide_index=True, use_container_width=True)
-        st.download_button("Exportar PDF — Evolução diária", data=pdf_black_friday("Evolução diária", diario_exibicao),
-                           file_name="black_friday_evolucao_diaria.pdf", mime="application/pdf", key="pdf_bf_diario")
+            st.dataframe(diario_exibicao, hide_index=True, use_container_width=True, height=510)
+        botao_pdf_black_friday("Evolução diária", diario_exibicao, "black_friday_evolucao_diaria.pdf", "pdf_bf_diario")
     with tab4:
         pagamento = resultado.sort_values("Posição premiação", na_position="last").copy()
         pagamento["Meta Black Friday atingida"] = pagamento["Faturamento Black Friday"] >= pagamento["Meta Black Friday"] - 0.005
@@ -2628,9 +2639,8 @@ def render_black_friday(df_vendas):
         tabela_pagamento = pagamento[["Posição premiação", "Loja", "Meta Black Friday", "Faturamento Black Friday", "Situação pagamento", "Premiação loja", "Premiação gerente"]].copy()
         for col in ["Meta Black Friday", "Faturamento Black Friday", "Premiação loja", "Premiação gerente"]:
             tabela_pagamento[col] = tabela_pagamento[col].map(moeda)
-        st.dataframe(tabela_pagamento, hide_index=True, use_container_width=True)
-        st.download_button("Exportar PDF — Pagamento das premiações", data=pdf_black_friday("Pagamento das premiações", tabela_pagamento),
-                           file_name="black_friday_pagamento_premiacoes.pdf", mime="application/pdf", key="pdf_bf_pagamento")
+        st.dataframe(tabela_pagamento, hide_index=True, use_container_width=True, height=510)
+        botao_pdf_black_friday("Pagamento das premiações", tabela_pagamento, "black_friday_pagamento_premiacoes.pdf", "pdf_bf_pagamento")
     st.download_button("Exportar acompanhamento (CSV)", resultado.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), file_name="black_friday_dauto_2026.csv", mime="text/csv")
 
 
