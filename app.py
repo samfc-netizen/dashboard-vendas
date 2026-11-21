@@ -2460,7 +2460,7 @@ def calcular_black_friday(df_vendas, df_metas):
             "Ating. Black Friday (%)": fb / meta_bf * 100,
             "Saldo Black Friday (R$)": fb - meta_bf,
             "Meta mensal atingida": atingiu,
-            "Situação": "Elegível — meta mensal atingida" if atingiu else ("Aguardando meta mensal" if pd.notna(mm) else "Meta mensal indisponível"),
+            "Situação": "Meta mensal atingida" if atingiu else (f"Falta R${format_brl(max(0.0, -saldo))} para bater meta mensal" if pd.notna(mm) else "Meta mensal indisponível"),
         })
     resultado = pd.DataFrame(linhas)
     # Sem meta mensal, não atribuir posição de premiação arbitrária.
@@ -2491,6 +2491,58 @@ def calcular_black_friday(df_vendas, df_metas):
     return resultado
 
 
+PREMIOS_LOJA_BLACK_FRIDAY = {1:1500, 2:1200, 3:900, 4:720, 5:600, 6:480, 7:300, 8:300, 9:300}
+PREMIOS_GERENTE_BLACK_FRIDAY = {1:600, 2:400, 3:350, 4:300, 5:180, 6:180, 7:150, 8:120, 9:120}
+
+
+def pdf_black_friday(titulo, tabela, observacao=""):
+    """Exporta a visão exibida, com paginação automática e moeda brasileira."""
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, KeepTogether
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import landscape, A4
+    from reportlab.lib.units import mm
+    from xml.sax.saxutils import escape
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=11*mm,
+                            leftMargin=11*mm, topMargin=13*mm, bottomMargin=12*mm)
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="BFCabecalho", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=7,
+                              leading=9, textColor=colors.white))
+    styles.add(ParagraphStyle(name="BFTexto", parent=styles["Normal"], fontName="Helvetica", fontSize=6.6,
+                              leading=8.5, wordWrap="CJK"))
+    styles.add(ParagraphStyle(name="BFTitulo", parent=styles["Heading1"], fontSize=15, leading=18,
+                              textColor=colors.HexColor("#123a73")))
+    linhas = [[Paragraph(escape(str(c)), styles["BFCabecalho"]) for c in tabela.columns]]
+    for _, linha in tabela.iterrows():
+        linhas.append([Paragraph(escape("—" if pd.isna(v) else str(v)), styles["BFTexto"]) for v in linha])
+    largura = landscape(A4)[0] - 22*mm
+    larguras = []
+    for col in tabela.columns:
+        peso = 1.6 if col in ("Situação", "Loja") else 1.0
+        larguras.append(peso)
+    soma = sum(larguras)
+    larguras = [largura * x/soma for x in larguras]
+    tab = Table(linhas, colWidths=larguras, repeatRows=1, hAlign="LEFT")
+    tab.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#183454")),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f0f5fb")]),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+        ("TOPPADDING", (0,0), (-1,-1), 6),
+        ("LINEBELOW", (0,0), (-1,0), 0.5, colors.HexColor("#dce6f2")),
+    ]))
+    elementos = [Paragraph("DAUTO TINTAS | " + escape(titulo), styles["BFTitulo"]),
+                 Paragraph("Black Friday 2026 | 23 a 27 de novembro", styles["Normal"]), Spacer(1, 7*mm)]
+    if observacao:
+        elementos += [Paragraph(escape(observacao), styles["Normal"]), Spacer(1, 4*mm)]
+    elementos.append(tab)
+    doc.build(elementos)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def render_black_friday(df_vendas):
     st.markdown("## BLACK FRIDAY | DAUTO TINTAS")
     st.caption("23 a 27 de novembro de 2026 · Ranking para premiação condicionado à meta mensal de novembro")
@@ -2507,24 +2559,40 @@ def render_black_friday(df_vendas):
     b.metric("Faturamento Black Friday", moeda(resultado["Faturamento Black Friday"].sum()))
     c.metric("Atingimento Black Friday", format_decimal_pt(100 * resultado["Faturamento Black Friday"].sum() / resultado["Meta Black Friday"].sum(), 1) + "%")
     d.metric("Lojas com meta mensal atingida", f'{int(resultado["Meta mensal atingida"].sum())} / {len(resultado)}')
-    st.info("Ranking de premiação: lojas que atingiram a meta mensal ficam sempre à frente. Entre elas, vence o maior excedente em R$ sobre a meta individual da Black Friday (faturamento Black Friday − meta Black Friday). Lojas sem meta mensal atingida ficam atrás, ordenadas pelo menor valor em R$ que falta para a meta mensal. Empates: maior saldo Black Friday, maior faturamento Black Friday e nome da loja. O ranking de faturamento Black Friday é independente.")
-    tab1, tab2, tab3 = st.tabs(["Ranking de premiação", "Ranking de faturamento Black Friday", "Evolução diária"])
+    st.info("Ranking: primeiro as lojas com meta mensal atingida, classificadas pelo maior excedente em R$ sobre a meta individual da Black Friday. As demais ficam atrás, pelo menor valor que falta para a meta mensal. Premiação somente para quem atingir ambas as metas.")
+
+    def exibir_tabela(tabela, chave, nome_pdf, progresso=None):
+        config = {}
+        if progresso:
+            config[progresso] = st.column_config.ProgressColumn(progresso, min_value=0, max_value=100, format="%.1f%%")
+        # A coluna Situação usa marcação vermelha para metas mensais pendentes.
+        if "Situação" in tabela.columns:
+            def cor_situacao(valor):
+                if str(valor).startswith("Falta "):
+                    return "background-color:#fee2e2;color:#991b1b;font-weight:700;border-radius:5px;"
+                if valor == "Meta mensal atingida":
+                    return "background-color:#dcfce7;color:#166534;font-weight:700;border-radius:5px;"
+                return ""
+            estilo = tabela.style.map(cor_situacao, subset=["Situação"]) if hasattr(tabela.style, "map") else tabela.style.applymap(cor_situacao, subset=["Situação"])
+            st.dataframe(estilo, hide_index=True, use_container_width=True, column_config=config)
+        else:
+            st.dataframe(tabela, hide_index=True, use_container_width=True, column_config=config)
+        st.download_button("Exportar PDF — " + chave, data=pdf_black_friday(chave, tabela),
+                           file_name=nome_pdf, mime="application/pdf", key="pdf_bf_" + nome_pdf)
+
+    tab1, tab2, tab3, tab4 = st.tabs(["Ranking de premiação", "Ranking de faturamento Black Friday", "Evolução diária", "Pagamento das premiações"])
     with tab1:
         colunas = ["Posição premiação", "Loja", "Faturamento mensal", "Meta mensal", "Ating. mensal (%)", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday", "Posição faturamento Black Friday", "Situação"]
         quadro = resultado.sort_values("Posição premiação", na_position="last")[colunas].copy()
         for coluna_moeda in ["Faturamento mensal", "Meta mensal", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday"]:
             quadro[coluna_moeda] = quadro[coluna_moeda].map(moeda)
-        st.dataframe(quadro, hide_index=True, use_container_width=True, column_config={
-            "Ating. mensal (%)": st.column_config.ProgressColumn("Ating. mensal (%)", min_value=0, max_value=100, format="%.1f%%"),
-        })
+        exibir_tabela(quadro, "Ranking de premiação", "black_friday_ranking_premiacao.pdf", "Ating. mensal (%)")
     with tab2:
         colunas = ["Posição faturamento Black Friday", "Loja", "Faturamento Black Friday", "Meta Black Friday", "Ating. Black Friday (%)", "Saldo Black Friday (R$)", "Falta meta mensal", "Posição premiação", "Situação"]
         quadro_faturamento = resultado.sort_values("Posição faturamento Black Friday")[colunas].copy()
         for coluna_moeda in ["Faturamento Black Friday", "Meta Black Friday", "Saldo Black Friday (R$)", "Falta meta mensal"]:
             quadro_faturamento[coluna_moeda] = quadro_faturamento[coluna_moeda].map(moeda)
-        st.dataframe(quadro_faturamento, hide_index=True, use_container_width=True, column_config={
-            "Ating. Black Friday (%)": st.column_config.ProgressColumn("Ating. Black Friday (%)", min_value=0, max_value=100, format="%.1f%%"),
-        })
+        exibir_tabela(quadro_faturamento, "Ranking de faturamento Black Friday", "black_friday_ranking_faturamento.pdf", "Ating. Black Friday (%)")
         fig = px.bar(resultado.sort_values("Faturamento Black Friday", ascending=True), x="Faturamento Black Friday", y="Loja", orientation="h", text="Faturamento Black Friday", title="Faturamento acumulado da Black Friday")
         fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
         bi_plotly_chart(fig, use_container_width=True)
@@ -2533,6 +2601,7 @@ def render_black_friday(df_vendas):
         d = d[(d["DATA"] >= pd.Timestamp("2026-11-23")) & (d["DATA"] < pd.Timestamp("2026-11-28"))]
         if d.empty:
             st.info("Ainda não há vendas registradas no período de 23 a 27/11/2026.")
+            diario_exibicao = pd.DataFrame(columns=["Dia", "Loja", "Faturamento (R$)"])
         else:
             d["Dia"] = pd.to_datetime(d["DATA"]).dt.strftime("%d/%m")
             d["Loja"] = d["LOJA_KEY"].map(BLACK_FRIDAY_NOMES)
@@ -2542,6 +2611,26 @@ def render_black_friday(df_vendas):
             diario_exibicao = diario.rename(columns={"FAT_LINHA": "Faturamento (R$)"}).copy()
             diario_exibicao["Faturamento (R$)"] = diario_exibicao["Faturamento (R$)"].map(moeda)
             st.dataframe(diario_exibicao, hide_index=True, use_container_width=True)
+        st.download_button("Exportar PDF — Evolução diária", data=pdf_black_friday("Evolução diária", diario_exibicao),
+                           file_name="black_friday_evolucao_diaria.pdf", mime="application/pdf", key="pdf_bf_diario")
+    with tab4:
+        pagamento = resultado.sort_values("Posição premiação", na_position="last").copy()
+        pagamento["Meta Black Friday atingida"] = pagamento["Faturamento Black Friday"] >= pagamento["Meta Black Friday"] - 0.005
+        pagamento["Pagamento liberado"] = pagamento["Meta mensal atingida"] & pagamento["Meta Black Friday atingida"]
+        pagamento["Premiação loja"] = pagamento.apply(lambda r: PREMIOS_LOJA_BLACK_FRIDAY.get(int(r["Posição premiação"]), 0) if r["Pagamento liberado"] and pd.notna(r["Posição premiação"]) else 0, axis=1)
+        pagamento["Premiação gerente"] = pagamento.apply(lambda r: PREMIOS_GERENTE_BLACK_FRIDAY.get(int(r["Posição premiação"]), 0) if r["Pagamento liberado"] and pd.notna(r["Posição premiação"]) else 0, axis=1)
+        pagamento["Situação pagamento"] = pagamento.apply(lambda r: "Não alcançou a meta Black Friday" if not r["Meta Black Friday atingida"] else ("Meta mensal não atingida" if not r["Meta mensal atingida"] else "Premiação habilitada"), axis=1)
+        st.caption("Valores previstos conforme posição atual. Pagamento condicionado ao atingimento da meta individual da Black Friday e da meta mensal de novembro. A posição e os valores podem mudar com novas vendas.")
+        x,y,z = st.columns(3)
+        x.metric("Premiação lojas", moeda(pagamento["Premiação loja"].sum()))
+        y.metric("Premiação gerentes", moeda(pagamento["Premiação gerente"].sum()))
+        z.metric("Total previsto", moeda(pagamento["Premiação loja"].sum() + pagamento["Premiação gerente"].sum()))
+        tabela_pagamento = pagamento[["Posição premiação", "Loja", "Meta Black Friday", "Faturamento Black Friday", "Situação pagamento", "Premiação loja", "Premiação gerente"]].copy()
+        for col in ["Meta Black Friday", "Faturamento Black Friday", "Premiação loja", "Premiação gerente"]:
+            tabela_pagamento[col] = tabela_pagamento[col].map(moeda)
+        st.dataframe(tabela_pagamento, hide_index=True, use_container_width=True)
+        st.download_button("Exportar PDF — Pagamento das premiações", data=pdf_black_friday("Pagamento das premiações", tabela_pagamento),
+                           file_name="black_friday_pagamento_premiacoes.pdf", mime="application/pdf", key="pdf_bf_pagamento")
     st.download_button("Exportar acompanhamento (CSV)", resultado.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), file_name="black_friday_dauto_2026.csv", mime="text/csv")
 
 
