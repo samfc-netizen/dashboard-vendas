@@ -2433,7 +2433,7 @@ BLACK_FRIDAY_NOMES = {
 }
 
 def calcular_black_friday(df_vendas, df_metas):
-    """Ranking mensal para premiação e ranking de faturamento da BF, sem filtros globais."""
+    """Ranking de premiação: meta mensal habilita; excedente Black Friday classifica."""
     dados = df_vendas.loc[df_vendas["DATA"].notna() & df_vendas["LOJA_KEY"].isin(BLACK_FRIDAY_METAS)].copy()
     datas = pd.to_datetime(dados["DATA"], errors="coerce")
     mensal = dados.loc[(datas >= pd.Timestamp("2026-11-01")) & (datas < pd.Timestamp("2026-12-01"))]
@@ -2465,10 +2465,20 @@ def calcular_black_friday(df_vendas, df_metas):
     resultado = pd.DataFrame(linhas)
     # Sem meta mensal, não atribuir posição de premiação arbitrária.
     resultado["Posição premiação"] = pd.NA
+    # Premiação: elegibilidade mensal obrigatória. Entre elegíveis,
+    # maior excedente absoluto sobre a meta da Black Friday.
+    # Entre não elegíveis, menor distância em R$ da meta mensal.
+    # Critérios de desempate: saldo Black Friday, faturamento Black Friday e loja.
     validos = resultado[resultado["Meta mensal"].notna()].sort_values(
-        ["Saldo mensal (R$)", "Faturamento Black Friday", "LOJA_KEY"],
-        ascending=[False, False, True], kind="stable"
+        ["Meta mensal atingida", "Saldo Black Friday (R$)", "Faturamento Black Friday", "LOJA_KEY"],
+        ascending=[False, False, False, True], kind="stable"
     )
+    elegiveis = validos[validos["Meta mensal atingida"]]
+    pendentes = validos[~validos["Meta mensal atingida"]].sort_values(
+        ["Falta meta mensal", "Saldo Black Friday (R$)", "Faturamento Black Friday", "LOJA_KEY"],
+        ascending=[True, False, False, True], kind="stable"
+    )
+    validos = pd.concat([elegiveis, pendentes])
     for posicao, indice in enumerate(validos.index, start=1):
         resultado.loc[indice, "Posição premiação"] = posicao
     resultado["Posição faturamento Black Friday"] = pd.NA
@@ -2497,7 +2507,7 @@ def render_black_friday(df_vendas):
     b.metric("Faturamento Black Friday", moeda(resultado["Faturamento Black Friday"].sum()))
     c.metric("Atingimento Black Friday", format_decimal_pt(100 * resultado["Faturamento Black Friday"].sum() / resultado["Meta Black Friday"].sum(), 1) + "%")
     d.metric("Lojas com meta mensal atingida", f'{int(resultado["Meta mensal atingida"].sum())} / {len(resultado)}')
-    st.info("Critério da posição parcial para premiação: maior saldo em R$ sobre a meta mensal (faturamento mensal − meta mensal). Lojas abaixo da meta ficam ordenadas por quanto falta, em R$; lojas acima ficam à frente pelo maior excedente. Empate: maior faturamento na Black Friday. A meta da Black Friday é acompanhada separadamente.")
+    st.info("Ranking de premiação: lojas que atingiram a meta mensal ficam sempre à frente. Entre elas, vence o maior excedente em R$ sobre a meta individual da Black Friday (faturamento Black Friday − meta Black Friday). Lojas sem meta mensal atingida ficam atrás, ordenadas pelo menor valor em R$ que falta para a meta mensal. Empates: maior saldo Black Friday, maior faturamento Black Friday e nome da loja. O ranking de faturamento Black Friday é independente.")
     tab1, tab2, tab3 = st.tabs(["Ranking de premiação", "Ranking de faturamento Black Friday", "Evolução diária"])
     with tab1:
         colunas = ["Posição premiação", "Loja", "Faturamento mensal", "Meta mensal", "Ating. mensal (%)", "Falta meta mensal", "Saldo mensal (R$)", "Faturamento Black Friday", "Meta Black Friday", "Posição faturamento Black Friday", "Situação"]
