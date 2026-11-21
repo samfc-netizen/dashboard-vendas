@@ -2537,7 +2537,37 @@ def pdf_black_friday(titulo, tabela, observacao=""):
                  Paragraph("Black Friday 2026 | 23 a 27 de novembro", styles["Normal"]), Spacer(1, 7*mm)]
     if observacao:
         elementos += [Paragraph(escape(observacao), styles["Normal"]), Spacer(1, 4*mm)]
+    if titulo == "Pagamento das premiações":
+        styles.add(ParagraphStyle(
+            name="BFNotaPremiacao", parent=styles["Normal"],
+            fontName="Helvetica-Bold", fontSize=10, leading=15,
+            textColor=colors.HexColor("#7c2d12"),
+        ))
+        notas = [
+            "R$200,00 para a loja que bateu a meta primeiro: Informar Loja",
+            "R$700,00 Budget para Gerente de vendas: Informar qual destino do valor.",
+        ]
+        conteudo_notas = [
+            [Paragraph(escape(nota), styles["BFNotaPremiacao"])]
+            for nota in notas
+        ]
+        quadro_notas = Table(conteudo_notas, colWidths=[largura], hAlign="LEFT")
+        quadro_notas.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fff0df")),
+            ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#ea9a3b")),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.4, colors.HexColor("#efc58b")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        notas_pdf = [Spacer(1, 4*mm), KeepTogether([
+            Paragraph("OBSERVAÇÕES ADICIONAIS DE PREMIAÇÃO", styles["BFTitulo"]),
+            Spacer(1, 2*mm), quadro_notas,
+        ])]
     elementos.append(tab)
+    if titulo == "Pagamento das premiações":
+        elementos.extend(notas_pdf)
     doc.build(elementos)
     buffer.seek(0)
     return buffer.getvalue()
