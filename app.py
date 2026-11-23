@@ -1586,6 +1586,30 @@ def _render_whatsapp_downloads(prefixo_key: str, numero: str, texto: str, nome_a
 
     st.caption("Se o navegador bloquear a cópia automática, copie pelo campo abaixo e cole no WhatsApp aberto.")
 
+def _resumo_markup_vendedores(df_base: pd.DataFrame) -> str:
+    """Markup = faturamento / CUSTO TT + ST, mesma regra do BI comercial."""
+    if df_base.empty:
+        return "*Markup geral:* —\n*Vendas por vendedor:* Sem vendas no período."
+    if "CUSTO_ST_NUM" not in df_base.columns or df_base["CUSTO_ST_NUM"].notna().sum() == 0:
+        return "*Markup geral:* Indisponível (sem CUSTO TT + ST).\n*Vendas por vendedor:* Dados de custo indisponíveis."
+    faturamento = pd.to_numeric(df_base["FAT_LINHA"], errors="coerce").fillna(0)
+    custo = pd.to_numeric(df_base["CUSTO_ST_NUM"], errors="coerce")
+    total_custo = float(custo.sum())
+    total_fat = float(faturamento.sum())
+    mkp = f"{total_fat / total_custo:.2f}x".replace(".", ",") if total_custo > 0 else "Indisponível"
+    linhas = [f"*Markup geral:* {mkp}", "*Vendas por vendedor e markup:*"]
+    if "VENDEDOR_N" not in df_base.columns:
+        linhas.append("Vendedores indisponíveis na base.")
+        return "\n".join(linhas)
+    tab = pd.DataFrame({"VENDEDOR": df_base["VENDEDOR_N"].astype(str), "FAT": faturamento, "CUSTO": custo})
+    grupos = tab.groupby("VENDEDOR", dropna=False).agg(FAT=("FAT", "sum"), CUSTO=("CUSTO", "sum"), CUSTO_VALIDO=("CUSTO", "count")).sort_values("FAT", ascending=False)
+    for nome, r in grupos.iterrows():
+        vendedor_mkp = (f"{float(r['FAT']) / float(r['CUSTO']):.2f}x".replace(".", ",")
+                        if float(r["CUSTO"]) > 0 and int(r["CUSTO_VALIDO"]) > 0 else "—")
+        linhas.append(f"- {nome}: {_money(r['FAT'])} | Markup: {vendedor_mkp}")
+    return "\n".join(linhas)
+
+
 def _montar_relatorio_diario_loja(df_loja: pd.DataFrame, loja_nome: str, data_rel, valor_col: str) -> str:
     total = float(df_loja["FAT_LINHA"].sum()) if len(df_loja) else 0.0
     partes = [
@@ -1593,6 +1617,8 @@ def _montar_relatorio_diario_loja(df_loja: pd.DataFrame, loja_nome: str, data_re
         f"Data: {data_rel.strftime('%d/%m/%Y')}",
         "",
         f"A loja vendeu *{_money(total)}* hoje.",
+        "",
+        _resumo_markup_vendedores(df_loja),
         "",
         _linhas_texto(df_loja),
         "",
@@ -1666,6 +1692,8 @@ def _montar_relatorio_mensal_loja(df_loja: pd.DataFrame, loja_nome: str, data_in
         texto_ano1,
         texto_meta,
         "",
+        _resumo_markup_vendedores(df_loja),
+        "",
         _linhas_texto(df_loja).replace("*Segmentos*", "*Linhas*"),
         "",
         _rank_text(df_loja, "MARCA_N", "Top 10 marcas da loja", "FAT_LINHA"),
@@ -1712,7 +1740,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         cols_rel = [
             c for c in [
                 "DATA", "LOJA_KEY", "LOJA_N", "FAT_LINHA", valor_col,
-                "SEGMENTO_N", "MARCA_N", "CLIENTE_N"
+                "SEGMENTO_N", "MARCA_N", "CLIENTE_N", "VENDEDOR_N", "CUSTO_ST_NUM"
             ] if c in df_base.columns
         ]
         df_rel = df_base.loc[mask_dia, cols_rel].copy()
@@ -1731,7 +1759,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         ]
         for k in lojas_keys:
             texto_geral.append(f"- *{lojas_map.get(k, k)}*: {_money(venda_loja.get(k, 0.0))}")
-        texto_geral += ["", _linhas_texto(df_rel), "", _rank_text(df_rel, "MARCA_N", "Top 10 marcas do dia", "FAT_LINHA"), "", "Os blocos por loja trazem o detalhe de segmentos, marcas e clientes do dia.", "", "==============================", "RELATÓRIOS POR LOJA", "=============================="]
+        texto_geral += ["", _resumo_markup_vendedores(df_rel), "", _linhas_texto(df_rel), "", _rank_text(df_rel, "MARCA_N", "Top 10 marcas do dia", "FAT_LINHA"), "", "Os blocos por loja trazem o detalhe de segmentos, marcas e clientes do dia.", "", "==============================", "RELATÓRIOS POR LOJA", "=============================="]
         for k in lojas_keys:
             df_loja = df_rel[df_rel["LOJA_KEY"] == k].copy()
             loja_nome = str(lojas_map.get(k, k))
@@ -1813,7 +1841,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
     cols_rel = [
         c for c in [
             "DATA", "LOJA_KEY", "LOJA_N", "FAT_LINHA", valor_col,
-            "SEGMENTO_N", "MARCA_N", "CLIENTE_N"
+            "SEGMENTO_N", "MARCA_N", "CLIENTE_N", "VENDEDOR_N", "CUSTO_ST_NUM"
         ] if c in df_base.columns
     ]
     df_rel = df_base.loc[mask_rel, cols_rel].copy()
@@ -1914,7 +1942,7 @@ def render_relatorios_whatsapp(df_base: pd.DataFrame, valor_col: str):
         blocos.append((k, loja_nome, bloco))
 
     titulo_marcas_geral = "Top 10 marcas do mês fechado" if mes_fechado else "Top 10 marcas até o momento"
-    texto_geral += ["", _linhas_texto(df_rel).replace("*Segmentos*", "*Análise por linhas*"), "", _rank_text(df_rel, "MARCA_N", titulo_marcas_geral, "FAT_LINHA"), "", "==============================", "RELATÓRIOS POR LOJA", "=============================="]
+    texto_geral += ["", _resumo_markup_vendedores(df_rel), "", _linhas_texto(df_rel).replace("*Segmentos*", "*Análise por linhas*"), "", _rank_text(df_rel, "MARCA_N", titulo_marcas_geral, "FAT_LINHA"), "", "==============================", "RELATÓRIOS POR LOJA", "=============================="]
     for _, _, bloco in blocos:
         texto_geral += ["", "------------------------------", bloco]
     texto_full = "\n".join(texto_geral)
@@ -2763,7 +2791,7 @@ def render_black_friday(df_vendas):
 # =========================
 # Carrega e prepara base
 # =========================
-pagina_app = st.sidebar.radio("Página", ["Dashboard", "Black Friday", "Relatórios"], index=0)
+pagina_app = st.sidebar.radio("Página", ["Dashboard", "Black Friday", "📲 Relatórios WhatsApp"], index=0)
 
 df = carregar_dados()
 df = df.loc[df["FAT_LINHA"].notna()]
@@ -2778,7 +2806,7 @@ VAL_COL = "VR_TOTAL_NUM" if use_vr_total else "FAT_LINHA"
 if pagina_app == "Black Friday":
     render_black_friday(df)
     st.stop()
-if pagina_app == "Relatórios":
+if pagina_app == "📲 Relatórios WhatsApp":
     render_relatorios_whatsapp(df, VAL_COL)
     st.stop()
 
