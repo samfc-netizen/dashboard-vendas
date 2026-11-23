@@ -2679,6 +2679,30 @@ def render_black_friday(df_vendas):
                          row_height=35)
         botao_pdf_black_friday(chave, tabela, nome_pdf, "pdf_bf_" + nome_pdf)
 
+    # Ação no cabeçalho das abas, sem reduzir a largura das tabelas.
+    mensagem = mensagem_whatsapp_black_friday(resultado)
+    link_whatsapp = "https://wa.me/556199783726?text=" + quote(mensagem, safe="")
+    st.markdown("""
+        <style>
+        .bf-whatsapp-topbar {display:flex;justify-content:flex-end;position:relative;
+            z-index:5;margin-bottom:-43px;pointer-events:none;padding-right:2px;}
+        .bf-whatsapp-topbar a {pointer-events:auto;display:inline-flex;align-items:center;
+            gap:8px;padding:9px 15px;background:#128c7e;color:white!important;
+            font-size:13px;font-weight:700;text-decoration:none!important;
+            border-radius:9px;box-shadow:0 3px 10px rgba(18,140,126,.14);}
+        .bf-whatsapp-topbar a:hover {background:#075e54;}
+        .bf-whatsapp-topbar svg {width:18px;height:18px;fill:currentColor;}
+        @media(max-width:950px){.bf-whatsapp-topbar{margin-bottom:10px;}}
+        </style>
+    """, unsafe_allow_html=True)
+    icone_whatsapp = ('<svg viewBox="0 0 24 24" aria-hidden="true">'
+        '<path d="M20.52 3.48A11.87 11.87 0 0 0 12.05 0C5.47 0 .12 5.35.12 11.93c0 2.1.55 4.16 1.59 5.98L0 24l6.24-1.64a11.93 11.93 0 0 0 5.8 1.48h.01c6.58 0 11.94-5.35 11.95-11.93a11.87 11.87 0 0 0-3.48-8.43ZM12.05 21.8a9.9 9.9 0 0 1-5.04-1.38l-.36-.21-3.74.98 1-3.64-.23-.37a9.87 9.87 0 0 1-1.52-5.25c0-5.46 4.44-9.9 9.9-9.9a9.84 9.84 0 0 1 7 2.9 9.83 9.83 0 0 1 2.9 7c0 5.46-4.45 9.9-9.91 9.9Zm5.43-7.42c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.47-2.4-1.49-.89-.79-1.49-1.76-1.66-2.06-.17-.3-.02-.46.13-.61.14-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.48-.5-.67-.51h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.06 2.88 1.21 3.08c.15.2 2.08 3.18 5.04 4.46.7.3 1.25.48 1.68.61.71.23 1.35.2 1.86.12.57-.08 1.76-.72 2.01-1.41.25-.7.25-1.3.17-1.41-.07-.13-.27-.2-.57-.35Z"/>'
+        '</svg>')
+    st.markdown(
+        f'<div class="bf-whatsapp-topbar"><a href="{html.escape(link_whatsapp, quote=True)}" '
+        f'target="_blank" rel="noopener noreferrer" title="Abrir relatório no WhatsApp">'
+        f'{icone_whatsapp} Enviar relatório WhatsApp</a></div>', unsafe_allow_html=True)
+
     tab1, tab2, tab3, tab4 = st.tabs(["Ranking de premiação", "Ranking de faturamento Black Friday", "Evolução diária", "Pagamento das premiações"])
     with tab1:
         # Visão executiva: elimina colunas redundantes e reserva espaço para a situação completa.
@@ -2732,14 +2756,7 @@ def render_black_friday(df_vendas):
         for col in ["Meta Black Friday", "Faturamento Black Friday", "Premiação loja", "Premiação gerente"]:
             tabela_pagamento[col] = tabela_pagamento[col].map(moeda)
         st.dataframe(tabela_pagamento, hide_index=True, use_container_width=True, height=510)
-        coluna_pdf, coluna_whatsapp = st.columns([1, 1], gap="small")
-        with coluna_pdf:
-            botao_pdf_black_friday("Pagamento das premiações", tabela_pagamento, "black_friday_pagamento_premiacoes.pdf", "pdf_bf_pagamento")
-        with coluna_whatsapp:
-            mensagem = mensagem_whatsapp_black_friday(resultado)
-            link_whatsapp = "https://wa.me/556199783726?text=" + quote(mensagem, safe="")
-            st.link_button("🟢 Enviar relatório WhatsApp", link_whatsapp, use_container_width=True,
-                           help="Abre o WhatsApp com o relatório das nove lojas pronto para conferência e envio.")
+        botao_pdf_black_friday("Pagamento das premiações", tabela_pagamento, "black_friday_pagamento_premiacoes.pdf", "pdf_bf_pagamento")
     st.download_button("Exportar acompanhamento (CSV)", resultado.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), file_name="black_friday_dauto_2026.csv", mime="text/csv")
 
 
