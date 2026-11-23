@@ -2586,6 +2586,46 @@ def botao_pdf_black_friday(titulo, tabela, nome_pdf, chave):
                        file_name=nome_pdf, mime="application/pdf", key=chave)
 
 
+def mensagem_whatsapp_black_friday(resultado):
+    """Monta relatório com os indicadores atuais, na ordem oficial das lojas."""
+    linhas = [
+        "*DAUTO TINTAS | BLACK FRIDAY 2026*",
+        "Período: 23 a 27/11/2026",
+        "*Acompanhamento por loja*",
+    ]
+    for loja_key in LOJA_KEY_ORDER:
+        registro = resultado.loc[resultado["LOJA_KEY"] == loja_key]
+        if registro.empty:
+            continue
+        r = registro.iloc[0]
+        meta_bf = float(r["Meta Black Friday"])
+        fat_bf = float(r["Faturamento Black Friday"])
+        meta_mes = r["Meta mensal"]
+        fat_mes = float(r["Faturamento mensal"])
+        falta_bf = max(0.0, meta_bf - fat_bf)
+        def brl(valor):
+            return "R$ " + format_brl(valor) if pd.notna(valor) else "Indisponível"
+        situacao_bf = "*META ATINGIDA*" if falta_bf < 0.005 else brl(falta_bf)
+        situacao_mes = (
+            "Meta indisponível" if pd.isna(meta_mes) else
+            "*META ATINGIDA*" if fat_mes >= float(meta_mes) - 0.005 else
+            brl(max(0.0, float(meta_mes) - fat_mes))
+        )
+        linhas.extend([
+            "",
+            f'*LOJA: {r["Loja"]}*',
+            f'Meta Black Friday: {brl(meta_bf)}',
+            f'Faturamento Black Friday: {brl(fat_bf)}',
+            f'Falta para meta Black: {situacao_bf}',
+            "",
+            f'Meta mensal: {brl(meta_mes)}',
+            f'Faturamento mensal: {brl(fat_mes)}',
+            f'Falta para meta mensal: {situacao_mes}',
+            "------------------------------",
+        ])
+    return "\n".join(linhas).rstrip("-\n ")
+
+
 def render_black_friday(df_vendas):
     st.markdown("## BLACK FRIDAY | DAUTO TINTAS")
     st.caption("23 a 27 de novembro de 2026 · Ranking para premiação condicionado à meta mensal de novembro")
@@ -2692,7 +2732,14 @@ def render_black_friday(df_vendas):
         for col in ["Meta Black Friday", "Faturamento Black Friday", "Premiação loja", "Premiação gerente"]:
             tabela_pagamento[col] = tabela_pagamento[col].map(moeda)
         st.dataframe(tabela_pagamento, hide_index=True, use_container_width=True, height=510)
-        botao_pdf_black_friday("Pagamento das premiações", tabela_pagamento, "black_friday_pagamento_premiacoes.pdf", "pdf_bf_pagamento")
+        coluna_pdf, coluna_whatsapp = st.columns([1, 1], gap="small")
+        with coluna_pdf:
+            botao_pdf_black_friday("Pagamento das premiações", tabela_pagamento, "black_friday_pagamento_premiacoes.pdf", "pdf_bf_pagamento")
+        with coluna_whatsapp:
+            mensagem = mensagem_whatsapp_black_friday(resultado)
+            link_whatsapp = "https://wa.me/556199783726?text=" + quote(mensagem, safe="")
+            st.link_button("🟢 Enviar relatório WhatsApp", link_whatsapp, use_container_width=True,
+                           help="Abre o WhatsApp com o relatório das nove lojas pronto para conferência e envio.")
     st.download_button("Exportar acompanhamento (CSV)", resultado.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), file_name="black_friday_dauto_2026.csv", mime="text/csv")
 
 
