@@ -2755,18 +2755,32 @@ def render_black_friday(df_vendas):
     with tab3:
         d = df_vendas.loc[df_vendas["DATA"].notna() & df_vendas["LOJA_KEY"].isin(BLACK_FRIDAY_METAS)].copy()
         d = d[(d["DATA"] >= pd.Timestamp("2026-11-23")) & (d["DATA"] < pd.Timestamp("2026-11-28"))]
+        d["Dia"] = d["DATA"].dt.strftime("%d/%m")
+        d["Loja"] = d["LOJA_KEY"].astype(str).map(BLACK_FRIDAY_NOMES)
+        diario = d.groupby(["Dia", "Loja"], observed=True, as_index=False)["FAT_LINHA"].sum()
+        lojas = [BLACK_FRIDAY_NOMES[k] for k in LOJA_KEY_ORDER if k in BLACK_FRIDAY_METAS]
+        dias = sorted(diario["Dia"].unique())
+        matriz = diario.pivot(index="Dia", columns="Loja", values="FAT_LINHA").reindex(index=dias, columns=lojas).fillna(0).astype(float)
+        matriz["Total do dia"] = matriz.sum(axis=1)
+        total_geral = matriz["Total do dia"].sum()
+        matriz.loc["TOTAL"] = matriz.sum(axis=0)
+        matriz.index.name = "Dia"
+        diario_exibicao = matriz.reset_index()
+        for col in lojas + ["Total do dia"]:
+            diario_exibicao[col] = diario_exibicao[col].map(lambda v: "R$ " + format_brl(v))
+        st.markdown("### Faturamento diário consolidado")
+        st.metric("TOTAL GERAL BLACK FRIDAY", "R$ " + format_brl(total_geral))
+        def destacar_total_diario(row):
+            return ["background-color:#e9f1ff;color:#10234a;font-weight:800;" if row["Dia"] == "TOTAL" or col == "Total do dia" else "" for col in row.index]
+        st.dataframe(diario_exibicao.style.apply(destacar_total_diario, axis=1),
+                     hide_index=True, use_container_width=True,
+                     height=45 + 35 * len(diario_exibicao), row_height=35,
+                     column_config={"Dia": st.column_config.TextColumn("Dia", width="small")})
         if d.empty:
             st.info("Ainda não há vendas registradas no período de 23 a 27/11/2026.")
-            diario_exibicao = pd.DataFrame(columns=["Dia", "Loja", "Faturamento (R$)"])
         else:
-            d["Dia"] = pd.to_datetime(d["DATA"]).dt.strftime("%d/%m")
-            d["Loja"] = d["LOJA_KEY"].map(BLACK_FRIDAY_NOMES)
-            diario = d.groupby(["Dia", "Loja"], observed=True, as_index=False)["FAT_LINHA"].sum()
             fig = px.bar(diario, x="Dia", y="FAT_LINHA", color="Loja", barmode="group", title="Faturamento diário por loja", labels={"FAT_LINHA": "Faturamento (R$)"})
             bi_plotly_chart(fig, use_container_width=True)
-            diario_exibicao = diario.rename(columns={"FAT_LINHA": "Faturamento (R$)"}).copy()
-            diario_exibicao["Faturamento (R$)"] = diario_exibicao["Faturamento (R$)"].map(moeda)
-            st.dataframe(diario_exibicao, hide_index=True, use_container_width=True, height=510)
         botao_pdf_black_friday("Evolução diária", diario_exibicao, "black_friday_evolucao_diaria.pdf", "pdf_bf_diario")
     with tab4:
         pagamento = resultado.sort_values("Posição premiação", na_position="last").copy()
