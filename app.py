@@ -372,7 +372,7 @@ def _otimizar_memoria_vendas(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["QTD_NUM", "UNIT_NUM", "FAT_LINHA", "VR_TOTAL_NUM", "CUSTO_ST_NUM", "CUSTO_T_NUM"]:
         if col in df.columns:
             try:
-                df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
+                df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64" if col in ("FAT_LINHA", "VR_TOTAL_NUM") else "float32")
             except Exception:
                 pass
     if "_ORDEM_LINHA" in df.columns:
@@ -2807,7 +2807,7 @@ def render_black_friday(df_vendas):
 pagina_app = st.sidebar.radio("Página", ["Dashboard", "Black Friday", "📲 Relatórios WhatsApp"], index=0)
 
 df = carregar_dados()
-df = df.loc[df["FAT_LINHA"].notna()]
+df = df.loc[df["FAT_LINHA"].notna() | df["VR_TOTAL_NUM"].notna()]
 
 # ========= Define a métrica de valor do cliente =========
 use_vr_total = df["VR_TOTAL_NUM"].notna().any()
@@ -2919,6 +2919,8 @@ st.markdown(f"**Meses selecionados:** {', '.join(MES_NUM_TO_NOME[m] for m in mes
 # Aplica filtros (dashboard principal)
 # =========================
 df_f = df.copy()
+df_f["FAT_MARKUP_ORIGINAL"] = df_f["FAT_LINHA"]
+df_f["FAT_LINHA"] = df_f[VAL_COL]
 
 if lojas_sel_aplicadas:
     df_f = df_f[df_f["LOJA_N"].isin(lojas_sel_aplicadas)]
@@ -2957,7 +2959,7 @@ with aba_resumo:
     else:
         df_2025 = montar_df_2025_fixo(lojas_keys_aplicadas)
 
-    df_2026 = df.loc[df["DATA"].notna() & (df["DATA"].dt.year == ANO_ATUAL)]
+    df_2026 = df_f.loc[df_f["DATA"].notna() & (df_f["DATA"].dt.year == ANO_ATUAL)].copy()
 
     if lojas_sel_aplicadas:
         df_2026 = df_2026[df_2026["LOJA_N"].isin(lojas_sel_aplicadas)].copy()
@@ -2979,7 +2981,8 @@ with aba_resumo:
         .rename(columns={"FAT_LINHA": "VENDAS_2026"})
     )
 
-    df_comp = df_2025.merge(df_2026_mensal, on=["LOJA_KEY", "MES_NUM"], how="left")
+    df_comp = df_2025.merge(df_2026_mensal, on=["LOJA_KEY", "MES_NUM"], how="outer")
+    df_comp["VENDAS_2025"] = df_comp["VENDAS_2025"].fillna(0.0)
     df_comp["VENDAS_2026"] = df_comp["VENDAS_2026"].fillna(0.0)
     df_comp["VAR_R$"] = df_comp["VENDAS_2026"] - df_comp["VENDAS_2025"]
     df_comp["VAR_%"] = df_comp.apply(
@@ -3146,13 +3149,13 @@ with aba_resumo:
             .reset_index()
         )
 
-        # Mantém somente dias em que houve movimento positivo na empresa, como no relatório do ERP.
+        # Inclui todos os dias registrados para conciliar devoluções e faturamento líquido.
         totais_dia_empresa = diario_loja.groupby("DATA_DIA")["VALOR_DIA"].sum()
-        dias_com_movimento = totais_dia_empresa[totais_dia_empresa > 0].index
+        dias_com_movimento = totais_dia_empresa.index
         diario_loja = diario_loja[diario_loja["DATA_DIA"].isin(dias_com_movimento)].copy()
 
         if diario_loja.empty:
-            st.info("Não há dias com faturamento positivo no recorte selecionado.")
+            st.info("Não há dias com movimento no recorte selecionado.")
         else:
             lojas_diarias = sorted(
                 diario_loja["LOJA_KEY"].dropna().astype(str).unique().tolist(),
@@ -3885,14 +3888,14 @@ with aba_vendas:
                 st.info("Coluna **CUSTO TT + ST** não encontrada (ou sem valores) no Excel para o recorte filtrado.")
             else:
                 vend_mkp = (
-                    df_tmp.groupby("VENDEDOR_N", dropna=False)[["FAT_LINHA", "CUSTO_ST_NUM"]]
+                    df_tmp.groupby("VENDEDOR_N", dropna=False)[["FAT_LINHA", "FAT_MARKUP_ORIGINAL", "CUSTO_ST_NUM"]]
                     .sum()
                     .reset_index()
                     .rename(columns={"VENDEDOR_N": "VENDEDOR", "FAT_LINHA": "Faturamento", "CUSTO_ST_NUM": "Custo TT + ST"})
                 )
 
                 vend_mkp["MARKUP"] = vend_mkp.apply(
-                    lambda r: (r["Faturamento"] / r["Custo TT + ST"])
+                    lambda r: (r["FAT_MARKUP_ORIGINAL"] / r["Custo TT + ST"])
                     if (r["Custo TT + ST"] not in (0, None) and not (isinstance(r["Custo TT + ST"], float) and pd.isna(r["Custo TT + ST"])))
                     else None,
                     axis=1,
@@ -3902,7 +3905,7 @@ with aba_vendas:
 
                 tot_fat = float(vend_mkp["Faturamento"].sum()) if len(vend_mkp) else 0.0
                 tot_cus = float(vend_mkp["Custo TT + ST"].sum()) if len(vend_mkp) else 0.0
-                tot_mkp = (tot_fat / tot_cus) if tot_cus not in (0, None) else None
+                tot_mkp = (float(vend_mkp["FAT_MARKUP_ORIGINAL"].sum()) / tot_cus) if tot_cus not in (0, None) else None
 
                 vend_disp = vend_mkp.copy()
                 vend_disp["Faturamento (R$)"] = vend_disp["Faturamento"].apply(lambda v: "R$ " + format_brl(v))
@@ -4075,7 +4078,7 @@ with aba_vendas:
 
     # ===== MARKUP GERAL (apenas o número) =====
     custo_total_mkp = float(df_f["CUSTO_ST_NUM"].sum()) if ("CUSTO_ST_NUM" in df_f.columns and len(df_f)) else 0.0
-    mkp_geral = (fat_total / custo_total_mkp) if custo_total_mkp not in (0, None) else None
+    mkp_geral = (float(df_f["FAT_MARKUP_ORIGINAL"].sum()) / custo_total_mkp) if custo_total_mkp not in (0, None) else None
 
     st.markdown("#### Markup Geral")
     if mkp_geral is None:
