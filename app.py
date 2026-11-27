@@ -787,8 +787,6 @@ def carregar_dados():
     else:
         df["UNIT_NUM"] = pd.Series([None] * len(df), dtype="float64")
 
-    # Faturamento por linha
-    df["FAT_LINHA"] = df["QTD_NUM"] * df["UNIT_NUM"]
 
     # Dimensões básicas
     df["LOJA_N"] = normalize_dim(df["LOJA"], "SEM LOJA") if "LOJA" in df.columns else pd.Series(["SEM LOJA"] * len(df), dtype="string")
@@ -839,15 +837,13 @@ def carregar_dados():
     else:
         df["CLIENTE_N"] = pd.Series(["SEM CLIENTE"] * len(df), dtype="string")
 
-    # VR TOTAL (se existir)
-    col_vr = pick_first_existing_col(
-        df,
-        ["VR TOTAL", "VRTOTAL", "VR_TOTAL", "VALOR TOTAL", "VALOR_TOTAL", "VR TOTAL (NF)", "VALOR A FATURAR (NF)", "VALOR A FATURAR NF"],
-    )
-    if col_vr is not None:
-        df["VR_TOTAL_NUM"] = to_float_series(df[col_vr])
-    else:
-        df["VR_TOTAL_NUM"] = pd.Series([None] * len(df), dtype="float64")
+    # Faturamento oficial: VR.TOTAL do ERP, sem recalcular QTD x UNIT.
+    col_vr = next((c for c in df.columns if canonical_key(c) == "VRTOTAL"), None)
+    if col_vr is None:
+        st.error("Coluna VR.TOTAL não encontrada na base de vendas.")
+        st.stop()
+    df["VR_TOTAL_NUM"] = to_float_series(df[col_vr]).astype("float64")
+    df["FAT_LINHA"] = df["VR_TOTAL_NUM"]
 
     # ✅ CUSTO TT + ST (coluna AA no Excel, buscamos pelo cabeçalho)
     col_custo = pick_first_existing_col(
@@ -2807,11 +2803,10 @@ def render_black_friday(df_vendas):
 pagina_app = st.sidebar.radio("Página", ["Dashboard", "Black Friday", "📲 Relatórios WhatsApp"], index=0)
 
 df = carregar_dados()
-df = df.loc[df["FAT_LINHA"].notna() | df["VR_TOTAL_NUM"].notna()]
+df = df.loc[df["VR_TOTAL_NUM"].notna()]
 
 # ========= Define a métrica de valor do cliente =========
-use_vr_total = df["VR_TOTAL_NUM"].notna().any()
-VAL_COL = "VR_TOTAL_NUM" if use_vr_total else "FAT_LINHA"
+VAL_COL = "VR_TOTAL_NUM"
 
 # =========================
 # Navegação
@@ -4503,7 +4498,7 @@ with aba_clientes:
     else:
         df_evo["MES_NUM"] = df_evo["DATA"].dt.month
 
-        # Pivot: Cliente x Mês (VAL_COL já definido no app: VR_TOTAL_NUM ou FAT_LINHA)
+        # Pivot: Cliente x Mês (VAL_COL definido no app: VR_TOTAL_NUM)
         tbl_evo = (
             df_evo.groupby(["CLIENTE_N", "MES_NUM"], dropna=False)[VAL_COL]
             .sum()
