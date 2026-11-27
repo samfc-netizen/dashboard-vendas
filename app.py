@@ -2461,7 +2461,7 @@ BLACK_FRIDAY_NOMES = {
 }
 
 def calcular_black_friday(df_vendas, df_metas):
-    """Ranking de premiação: meta mensal habilita; excedente Black Friday classifica."""
+    """Ranking de premiação: meta coletiva libera; metas individuais definem prioridade."""
     dados = df_vendas.loc[df_vendas["DATA"].notna() & df_vendas["LOJA_KEY"].isin(BLACK_FRIDAY_METAS)].copy()
     datas = pd.to_datetime(dados["DATA"], errors="coerce")
     mensal = dados.loc[(datas >= pd.Timestamp("2026-11-01")) & (datas < pd.Timestamp("2026-12-01"))]
@@ -2491,22 +2491,16 @@ def calcular_black_friday(df_vendas, df_metas):
             "Situação": "Meta mensal atingida" if atingiu else (f"Falta R${format_brl(max(0.0, -saldo))} para bater meta mensal" if pd.notna(mm) else "Meta mensal indisponível"),
         })
     resultado = pd.DataFrame(linhas)
-    # Sem meta mensal, não atribuir posição de premiação arbitrária.
+    resultado["Meta Black Friday atingida"] = resultado["Saldo Black Friday (R$)"] >= -0.005
+    # Meta coletiva mensal das nove lojas participantes.
+    grupo_atingiu = bool(resultado["Meta mensal"].notna().all() and
+                         resultado["Faturamento mensal"].sum() >= resultado["Meta mensal"].sum() - 0.005)
+    resultado["Meta geral do grupo atingida"] = grupo_atingiu
     resultado["Posição premiação"] = pd.NA
-    # Premiação: elegibilidade mensal obrigatória. Entre elegíveis,
-    # maior excedente absoluto sobre a meta da Black Friday.
-    # Entre não elegíveis, menor distância em R$ da meta mensal.
-    # Critérios de desempate: saldo Black Friday, faturamento Black Friday e loja.
     validos = resultado[resultado["Meta mensal"].notna()].sort_values(
-        ["Meta mensal atingida", "Saldo Black Friday (R$)", "Faturamento Black Friday", "LOJA_KEY"],
-        ascending=[False, False, False, True], kind="stable"
+        ["Meta Black Friday atingida", "Meta mensal atingida", "Saldo Black Friday (R$)", "Faturamento Black Friday", "LOJA_KEY"],
+        ascending=[False, False, False, False, True], kind="stable"
     )
-    elegiveis = validos[validos["Meta mensal atingida"]]
-    pendentes = validos[~validos["Meta mensal atingida"]].sort_values(
-        ["Falta meta mensal", "Saldo Black Friday (R$)", "Faturamento Black Friday", "LOJA_KEY"],
-        ascending=[True, False, False, True], kind="stable"
-    )
-    validos = pd.concat([elegiveis, pendentes])
     for posicao, indice in enumerate(validos.index, start=1):
         resultado.loc[indice, "Posição premiação"] = posicao
     resultado["Posição faturamento Black Friday"] = pd.NA
@@ -2656,7 +2650,7 @@ def mensagem_whatsapp_black_friday(resultado):
 
 def render_black_friday(df_vendas):
     st.markdown("## BLACK FRIDAY | DAUTO TINTAS")
-    st.caption("23 a 27 de novembro de 2026 · Ranking para premiação condicionado à meta mensal de novembro")
+    st.caption("23 a 27 de novembro de 2026 · Premiação condicionada à meta mensal geral do grupo")
     metas_ref, _, _ = carregar_referencias_planejamento()
     if metas_ref is None or metas_ref.empty:
         metas_ref = montar_df_metas_fixas(list(BLACK_FRIDAY_METAS))
@@ -2670,7 +2664,12 @@ def render_black_friday(df_vendas):
     b.metric("Faturamento Black Friday", moeda(resultado["Faturamento Black Friday"].sum()))
     c.metric("Atingimento Black Friday", format_decimal_pt(100 * resultado["Faturamento Black Friday"].sum() / resultado["Meta Black Friday"].sum(), 1) + "%")
     d.metric("Lojas com meta mensal atingida", f'{int(resultado["Meta mensal atingida"].sum())} / {len(resultado)}')
-    st.info("Ranking: primeiro as lojas com meta mensal atingida, classificadas pelo maior excedente em R$ sobre a meta individual da Black Friday. As demais ficam atrás, pelo menor valor que falta para a meta mensal. Premiação somente para quem atingir ambas as metas.")
+    st.info("Ranking: primeiro as lojas que atingiram ambas as metas; depois as que atingiram somente a meta Black Friday. Em cada grupo, vale o maior excedente em R$ da Black Friday. Lojas sem meta Black atingida não recebem premiação.")
+
+    if resultado["Meta geral do grupo atingida"].all():
+        st.success("Meta mensal geral do grupo atingida: premiações liberadas para lojas que atingiram a meta Black Friday.")
+    else:
+        st.warning("Premiações bloqueadas: meta mensal geral do grupo não atingida ou metas incompletas.")
 
     def exibir_tabela(tabela, chave, nome_pdf, progresso=None):
         # Colunas com larguras proporcionais ao conteúdo: posição compacta e situação ampla.
@@ -2785,11 +2784,11 @@ def render_black_friday(df_vendas):
     with tab4:
         pagamento = resultado.sort_values("Posição premiação", na_position="last").copy()
         pagamento["Meta Black Friday atingida"] = pagamento["Faturamento Black Friday"] >= pagamento["Meta Black Friday"] - 0.005
-        pagamento["Pagamento liberado"] = pagamento["Meta mensal atingida"] & pagamento["Meta Black Friday atingida"]
+        pagamento["Pagamento liberado"] = pagamento["Meta geral do grupo atingida"] & pagamento["Meta Black Friday atingida"] & pagamento["Posição premiação"].notna()
         pagamento["Premiação loja"] = pagamento.apply(lambda r: PREMIOS_LOJA_BLACK_FRIDAY.get(int(r["Posição premiação"]), 0) if r["Pagamento liberado"] and pd.notna(r["Posição premiação"]) else 0, axis=1)
         pagamento["Premiação gerente"] = pagamento.apply(lambda r: PREMIOS_GERENTE_BLACK_FRIDAY.get(int(r["Posição premiação"]), 0) if r["Pagamento liberado"] and pd.notna(r["Posição premiação"]) else 0, axis=1)
-        pagamento["Situação pagamento"] = pagamento.apply(lambda r: "Não alcançou a meta Black Friday" if not r["Meta Black Friday atingida"] else ("Meta mensal não atingida" if not r["Meta mensal atingida"] else "Premiação habilitada"), axis=1)
-        st.caption("Valores previstos conforme posição atual. Pagamento condicionado ao atingimento da meta individual da Black Friday e da meta mensal de novembro. A posição e os valores podem mudar com novas vendas.")
+        pagamento["Situação pagamento"] = pagamento.apply(lambda r: "Não alcançou a meta Black Friday" if not r["Meta Black Friday atingida"] else ("Meta mensal indisponível" if pd.isna(r["Posição premiação"]) else ("Meta geral do grupo não atingida" if not r["Meta geral do grupo atingida"] else ("Premiação habilitada — somente meta Black" if not r["Meta mensal atingida"] else "Premiação habilitada"))), axis=1)
+        st.caption("Valores previstos conforme posição atual. Pagamento condicionado à meta mensal geral do grupo e à meta individual da Black Friday. A posição e os valores podem mudar com novas vendas.")
         x,y,z = st.columns(3)
         x.metric("Premiação lojas", moeda(pagamento["Premiação loja"].sum()))
         y.metric("Premiação gerentes", moeda(pagamento["Premiação gerente"].sum()))
